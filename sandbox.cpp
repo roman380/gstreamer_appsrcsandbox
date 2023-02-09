@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <fstream>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <chrono>
 
@@ -65,7 +67,12 @@ struct Application {
           stream.read (reinterpret_cast<char*> (data.data ()), data.size ());
           GstBuffer* buffer = gst_buffer_new_allocate (nullptr, size, nullptr);
           gst_buffer_fill (buffer, 0, data.data (), data.size ());
-          gst_app_src_push_buffer (source, buffer);
+          {
+            std::unique_lock source_data_lock (source_data_mutex);
+            source_data_condition.wait (source_data_lock, [&] { return source_data_need.load () || termination.load (); });
+          }
+          auto const result = gst_app_src_push_buffer (source, buffer);
+          g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
         } break;
         case 3: {
           gst_app_src_end_of_stream (source);
@@ -81,10 +88,31 @@ struct Application {
     GST_INFO_OBJECT (element, "playbin source setup, %hs", GST_ELEMENT_NAME (element));
     source = GST_APP_SRC (element);
     gst_object_ref (GST_OBJECT_CAST (source));
+    g_object_set (source, // https://gstreamer.freedesktop.org/documentation/app/appsrc.html?gi-language=c
+        "max-bytes", static_cast<guint64> (2 << 20),
+        "min-percent", static_cast<guint> (50),
+        nullptr);
+    g_object_set (source, "format", GST_FORMAT_TIME, nullptr);
+    g_signal_connect (source, "enough-data", G_CALLBACK (+[] (GstElement* Element, Application* application) { application->handle_enough_data (); }), this);
+    g_signal_connect (source, "need-data", G_CALLBACK (+[] (GstElement* Element, guint DataSize, Application* application) { application->handle_need_data (); }), this);
+    source_data_need.store (true);
   }
   void handle_element_setup (GstElement* element)
   {
     GST_INFO_OBJECT (element, "playbin element setup, %hs", GST_ELEMENT_NAME (element));
+  }
+
+  void handle_enough_data ()
+  {
+    std::unique_lock source_data_lock (source_data_mutex);
+    source_data_need.store (false);
+    source_data_condition.notify_all ();
+  }
+  void handle_need_data ()
+  {
+    std::unique_lock source_data_lock (source_data_mutex);
+    source_data_need.store (true);
+    source_data_condition.notify_all ();
   }
 
   void handle_bus_error_message (GstBus* bus, GstMessage* message)
@@ -112,12 +140,15 @@ struct Application {
     g_assert_nonnull (message);
     GstState old_state, new_state, pending_state;
     gst_message_parse_state_changed (message, &old_state, &new_state, &pending_state);
-    g_print ("handle_bus_state_changed_message: %s, %s to %s, pending %s\n", GST_MESSAGE_SRC_NAME (message), gst_element_state_get_name (new_state), gst_element_state_get_name (old_state), gst_element_state_get_name (pending_state));
+    // g_print ("handle_bus_state_changed_message: %s, %s to %s, pending %s\n", GST_MESSAGE_SRC_NAME (message), gst_element_state_get_name (new_state), gst_element_state_get_name (old_state), gst_element_state_get_name (pending_state));
   }
 
   GstPipeline* pipeline = nullptr;
   GstElement* playbin = nullptr;
   GstAppSrc* source = nullptr;
+  std::mutex source_data_mutex;
+  std::condition_variable source_data_condition;
+  std::atomic_bool source_data_need;
 };
 
 inline void add_debug_output_log_function ()
@@ -146,7 +177,7 @@ int main (int argc, char* argv[])
   gst_debug_set_active (true);
   gst_debug_set_default_threshold (GST_LEVEL_INFO);
   // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
-#if defined(WIN32) && !defined(NDEBUG)
+#endif
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
@@ -181,6 +212,7 @@ int main (int argc, char* argv[])
   gst_message_unref (std::exchange (message, nullptr));
 
   push_thread_termination.store (true);
+  application.source_data_condition.notify_all ();
   push_thread.join ();
 
   gst_bus_remove_signal_watch (bus);
