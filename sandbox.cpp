@@ -15,20 +15,19 @@
 #include <gst/app/gstappsrc.h>
 
 #if defined(WIN32) && !defined(NDEBUG)
-#include <windows.h>
+#  include <windows.h>
 #endif
 
 void set_pipeline_state (GstPipeline* pipeline, GstState state)
 {
   g_assert_nonnull (pipeline);
-  auto const result = gst_element_set_state (GST_ELEMENT_CAST (pipeline), state);
+  const auto result = gst_element_set_state (GST_ELEMENT_CAST (pipeline), state);
   g_assert_true (result >= GST_STATE_CHANGE_SUCCESS);
   if (result == GST_STATE_CHANGE_ASYNC)
     g_assert_true (gst_element_get_state (GST_ELEMENT_CAST (pipeline), nullptr, nullptr, GST_CLOCK_TIME_NONE) != GST_STATE_CHANGE_FAILURE);
 }
 
 struct Application {
-
   Application () = default;
   ~Application () = default;
 
@@ -71,7 +70,7 @@ struct Application {
             std::unique_lock source_data_lock (source_data_mutex);
             source_data_condition.wait (source_data_lock, [&] { return source_data_need.load () || termination.load (); });
           }
-          auto const result = gst_app_src_push_buffer (source, buffer);
+          const auto result = gst_app_src_push_buffer (source, buffer);
           g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
         } break;
         case 3: {
@@ -154,7 +153,7 @@ struct Application {
 inline void add_debug_output_log_function ()
 {
 #if defined(WIN32) && !defined(NDEBUG)
-  auto const log_function = [] (GstDebugCategory* category, GstDebugLevel level, gchar const* file, gchar const* function, gint line, GObject* object, GstDebugMessage* message, gpointer) {
+  const auto log_function = [] (GstDebugCategory* category, GstDebugLevel level, const gchar* file, const gchar* function, gint line, GObject* object, GstDebugMessage* message, gpointer) {
     g_assert_true (category && message);
     if (level > category->threshold)
       return;
@@ -224,3 +223,9 @@ int main (int argc, char* argv[])
 
   return 0;
 }
+
+/*
+
+- use of playbin sink with caps & appsink to capture decoded video frames
+
+*/
