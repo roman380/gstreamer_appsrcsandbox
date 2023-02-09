@@ -8,6 +8,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 project(sandbox LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GLIB REQUIRED glib-2.0)
@@ -18,6 +19,6 @@ add_definitions(${GTK2_CFLAGS_OTHER})
 
 add_executable(sandbox sandbox.cpp)
 
-target_include_directories(sandbox PRIVATE ${GTK3_INCLUDE_DIRS} ${GST_INCLUDE_DIRS} ${GST_BASE_INCLUDE_DIRS})
-target_link_directories(sandbox PRIVATE ${GTK3_LIBRARY_DIRS} ${GST_LIBRARY_DIRS} ${GST_BASE_LIBRARY_DIRS})
-target_link_libraries(sandbox PRIVATE ${GTK3_LIBRARIES} ${GST_LIBRARIES} gstvideo-1.0 gstapp-1.0)
+target_include_directories(sandbox PRIVATE ${GST_INCLUDE_DIRS} ${GST_BASE_INCLUDE_DIRS})
+target_link_directories(sandbox PRIVATE ${GST_LIBRARY_DIRS} ${GST_BASE_LIBRARY_DIRS})
+target_link_libraries(sandbox PRIVATE Threads::Threads ${GST_LIBRARIES} gstvideo-1.0 gstapp-1.0)
