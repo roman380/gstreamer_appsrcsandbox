@@ -1,15 +1,19 @@
 #include <memory>
 #include <algorithm>
 #include <vector>
+#include <string>
+#include <sstream>
 #include <fstream>
 #include <atomic>
 #include <thread>
 #include <chrono>
 
-#include <string.h>
-
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
+
+#if defined(WIN32) && !defined(NDEBUG)
+#include <windows.h>
+#endif
 
 void set_pipeline_state (GstPipeline* pipeline, GstState state)
 {
@@ -22,12 +26,8 @@ void set_pipeline_state (GstPipeline* pipeline, GstState state)
 
 struct Application {
 
-  Application ()
-  {
-  }
-  ~Application ()
-  {
-  }
+  Application () = default;
+  ~Application () = default;
 
   void push (std::atomic_bool& termination, std::string path)
   {
@@ -76,11 +76,13 @@ struct Application {
 
   void handle_source_setup (GstElement* element)
   {
+    GST_INFO_OBJECT (element, "playbin source setup, %hs", GST_ELEMENT_NAME (element));
     source = GST_APP_SRC (element);
     gst_object_ref (GST_OBJECT_CAST (source));
   }
   void handle_element_setup (GstElement* element)
   {
+    GST_INFO_OBJECT (element, "playbin element setup, %hs", GST_ELEMENT_NAME (element));
   }
 
   void handle_bus_error_message (GstBus* bus, GstMessage* message)
@@ -116,9 +118,32 @@ struct Application {
   GstAppSrc* source = nullptr;
 };
 
+inline void add_debug_output_log_function ()
+{
+#if defined(WIN32) && !defined(NDEBUG)
+  auto const log_function = [] (GstDebugCategory* category, GstDebugLevel level, gchar const* file, gchar const* function, gint line, GObject* object, GstDebugMessage* message, gpointer) {
+    g_assert_true (category && message);
+    if (level > category->threshold)
+      return;
+    std::ostringstream stream;
+    char prefix[512];
+    sprintf_s (prefix, "%hs(%d): %hs: ", file, line, function);
+    stream << prefix << gst_debug_log_get_line (category, level, file, function, line, object, message); // << std::endl;
+    OutputDebugStringA (stream.str ().c_str ());
+  };
+  gst_debug_add_log_function (log_function, nullptr, nullptr);
+#endif
+}
+
 int main (int argc, char* argv[])
 {
   gst_init (&argc, &argv);
+
+  add_debug_output_log_function ();
+  gst_debug_set_active (true);
+
+  gst_debug_set_default_threshold (GST_LEVEL_INFO);
+  // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
@@ -141,10 +166,11 @@ int main (int argc, char* argv[])
   gst_element_sync_state_with_parent (application.playbin);
 
   std::atomic_bool push_thread_termination = false;
-  std::thread push_thread ([&] { application.push (push_thread_termination, "C:\\Project\\github.com\\gstreamer_appsrcreplay\\data\\AppSrc-Video"); });
+  std::thread push_thread ([&] { application.push (push_thread_termination, "..\\data\\AppSrc-Video"); });
 
   set_pipeline_state (application.pipeline, GST_STATE_PLAYING);
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+  GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN_CAST(application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c
   g_assert_true (message != nullptr);
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
