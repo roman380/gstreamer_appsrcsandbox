@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <filesystem>
 #include <fstream>
 #include <atomic>
 #include <thread>
@@ -33,6 +34,7 @@ struct Application {
   {
     std::ifstream stream;
     stream.open (path, std::ios_base::in | std::ios_base::binary);
+    g_assert_true (stream);
     for (; !termination.load ();) {
       if (source != nullptr)
         break;
@@ -139,11 +141,12 @@ int main (int argc, char* argv[])
 {
   gst_init (&argc, &argv);
 
+#if defined(WIN32) && !defined(NDEBUG)
   add_debug_output_log_function ();
   gst_debug_set_active (true);
-
   gst_debug_set_default_threshold (GST_LEVEL_INFO);
   // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
+#if defined(WIN32) && !defined(NDEBUG)
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
@@ -165,12 +168,14 @@ int main (int argc, char* argv[])
   gst_bin_add (GST_BIN (application.pipeline), application.playbin);
   gst_element_sync_state_with_parent (application.playbin);
 
+  std::string path = "../data/AppSrc-Video";
+  std::replace (path.begin (), path.end (), '/', static_cast<char> (std::filesystem::path::preferred_separator));
   std::atomic_bool push_thread_termination = false;
-  std::thread push_thread ([&] { application.push (push_thread_termination, "..\\data\\AppSrc-Video"); });
+  std::thread push_thread ([&] { application.push (push_thread_termination, path); });
 
   set_pipeline_state (application.pipeline, GST_STATE_PLAYING);
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-  GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN_CAST(application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c
+  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c
   g_assert_true (message != nullptr);
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
