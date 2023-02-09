@@ -40,7 +40,7 @@ struct Application {
         break;
       std::this_thread::sleep_for (std::chrono::milliseconds (200));
     }
-    for (; !termination.load ();) {
+    for (; !termination.load () && !stream.eof ();) {
       uint8_t type;
       stream.read (reinterpret_cast<char*> (&type), sizeof type);
       g_assert_nonnull (source);
