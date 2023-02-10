@@ -12,8 +12,12 @@
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}/build",
-            "environment": [],
-            "externalConsole": false,
+            "env": [
+                {
+                    "GST_DEBUG": "*:2,application:4,appsink:5"
+                }
+            ],
+            "externalConsole": true,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
             "setupCommands": [
@@ -23,7 +27,7 @@
                     "ignoreFailures": true
                 },
                 {
-                    "description":  "Set Disassembly Flavor to Intel",
+                    "description": "Set Disassembly Flavor to Intel",
                     "text": "-gdb-set disassembly-flavor intel",
                     "ignoreFailures": true
                 }

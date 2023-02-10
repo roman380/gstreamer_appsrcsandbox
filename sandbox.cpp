@@ -13,10 +13,14 @@
 
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/app/gstappsink.h>
 
 #if defined(WIN32) && !defined(NDEBUG)
 #  include <windows.h>
 #endif
+
+GST_DEBUG_CATEGORY_STATIC (application_category); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#adding-your-own-debug-information
+#define GST_CAT_DEFAULT application_category
 
 void set_pipeline_state (GstPipeline* pipeline, GstState state)
 {
@@ -55,6 +59,7 @@ struct Application {
             stream.read (reinterpret_cast<char*> (caps_string.data ()), caps_string.size ());
           }
           GstCaps* caps = gst_caps_from_string (caps_string.c_str ());
+          GST_INFO ("gst_app_src_set_caps: %s", caps_string.c_str ());
           gst_app_src_set_caps (source, caps);
           gst_caps_unref (caps);
         } break;
@@ -70,10 +75,12 @@ struct Application {
             std::unique_lock source_data_lock (source_data_mutex);
             source_data_condition.wait (source_data_lock, [&] { return source_data_need.load () || termination.load (); });
           }
+          GST_INFO ("gst_app_src_push_buffer");
           const auto result = gst_app_src_push_buffer (source, buffer);
           g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
         } break;
         case 3: {
+          GST_INFO ("gst_app_src_end_of_stream");
           gst_app_src_end_of_stream (source);
         } break;
         default:
@@ -103,15 +110,75 @@ struct Application {
 
   void handle_enough_data ()
   {
+    GST_WARNING ("handle_enough_data");
     std::unique_lock source_data_lock (source_data_mutex);
     source_data_need.store (false);
     source_data_condition.notify_all ();
   }
   void handle_need_data ()
   {
+    GST_WARNING ("handle_need_data");
     std::unique_lock source_data_lock (source_data_mutex);
     source_data_need.store (true);
     source_data_condition.notify_all ();
+  }
+
+  static std::string time (GstClockTime value)
+  {
+    char text[32];
+    sprintf (text, "%.3f", value / 1E9);
+    return text;
+  }
+  static std::string sample_text (GstSample* sample)
+  {
+    std::ostringstream stream;
+    if (sample) {
+      // const auto caps = gst_sample_get_caps (sample);
+      // if (caps) {
+      //   const auto caps_string = gst_caps_to_string (caps);
+      //   if (caps_string) {
+      //     stream << "caps: " << caps_string;
+      //     g_free (caps_string);
+      //   }
+      // }
+      const auto buffer = gst_sample_get_buffer (sample);
+      if (buffer) {
+        stream << "pts " << time (GST_BUFFER_PTS (buffer));
+      }
+    } else
+      stream << "(null)";
+    return stream.str ();
+  }
+
+  GstFlowReturn handle_sink_preroll_sample (GstAppSink* sink)
+  {
+    GST_DEBUG_OBJECT (sink, "handle_sink_preroll_sample");
+    g_assert_nonnull (sink);
+    for (;;) {
+      const auto sample = gst_app_sink_try_pull_preroll (sink, 0);
+      if (!sample)
+        break;
+      GST_INFO_OBJECT (sample, "handle_sink_preroll_sample: %s", sample_text (sample).c_str ());
+      gst_sample_unref (sample);
+    }
+    return GstFlowReturn::GST_FLOW_OK;
+  }
+  GstFlowReturn handle_sink_sample (GstAppSink* sink)
+  {
+    GST_DEBUG_OBJECT (sink, "handle_sink_sample");
+    g_assert_nonnull (sink);
+    for (;;) {
+      const auto sample = gst_app_sink_try_pull_sample (sink, 0);
+      if (!sample)
+        break;
+      GST_INFO_OBJECT (sample, "handle_sink_sample: %s", sample_text (sample).c_str ());
+      gst_sample_unref (sample);
+    }
+    return GstFlowReturn::GST_FLOW_OK;
+  }
+  void handle_sink_eos (GstAppSink* sink)
+  {
+    GST_INFO_OBJECT (sink, "handle_sink_eos");
   }
 
   void handle_bus_error_message (GstBus* bus, GstMessage* message)
@@ -121,9 +188,9 @@ struct Application {
     GError* error = nullptr;
     gchar* debug_message = nullptr;
     gst_message_parse_error (message, &error, &debug_message);
-    g_printerr ("handle_bus_error_message: %s, %s\n", GST_MESSAGE_SRC_NAME (message), error->message);
+    GST_ERROR ("handle_bus_error_message: %s, %s", GST_MESSAGE_SRC_NAME (message), error->message);
     if (debug_message)
-      g_printerr ("%s\n", debug_message);
+      GST_ERROR ("%s", debug_message);
     g_clear_error (&error);
     g_free (debug_message);
   }
@@ -131,7 +198,7 @@ struct Application {
   {
     g_assert_nonnull (bus);
     g_assert_nonnull (message);
-    g_print ("handle_bus_eos_message\n");
+    GST_INFO ("handle_bus_eos_message\n");
   }
   void handle_bus_state_changed_message (GstBus* bus, GstMessage* message)
   {
@@ -139,7 +206,7 @@ struct Application {
     g_assert_nonnull (message);
     GstState old_state, new_state, pending_state;
     gst_message_parse_state_changed (message, &old_state, &new_state, &pending_state);
-    // g_print ("handle_bus_state_changed_message: %s, %s to %s, pending %s\n", GST_MESSAGE_SRC_NAME (message), gst_element_state_get_name (new_state), gst_element_state_get_name (old_state), gst_element_state_get_name (pending_state));
+    GST_DEBUG ("handle_bus_state_changed_message: %s, %s to %s, pending %s\n", GST_MESSAGE_SRC_NAME (message), gst_element_state_get_name (new_state), gst_element_state_get_name (old_state), gst_element_state_get_name (pending_state));
   }
 
   GstPipeline* pipeline = nullptr;
@@ -148,6 +215,7 @@ struct Application {
   std::mutex source_data_mutex;
   std::condition_variable source_data_condition;
   std::atomic_bool source_data_need;
+  GstAppSink* sink = nullptr;
 };
 
 inline void add_debug_output_log_function ()
@@ -167,9 +235,13 @@ inline void add_debug_output_log_function ()
 #endif
 }
 
+// Table of Concepts https://gstreamer.freedesktop.org/documentation/tutorials/table-of-concepts.html#table-of-concepts
+
 int main (int argc, char* argv[])
 {
   gst_init (&argc, &argv);
+
+  GST_DEBUG_CATEGORY_INIT (application_category, "application", 0, "Application specific distinct debug category");
 
 #if defined(WIN32) && !defined(NDEBUG)
   add_debug_output_log_function ();
@@ -195,6 +267,22 @@ int main (int argc, char* argv[])
       nullptr);
   g_signal_connect (application.playbin, "source-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Application* application) { application->handle_source_setup (element); }), &application);
   g_signal_connect (application.playbin, "element-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Application* application) { application->handle_element_setup (element); }), &application);
+
+  {
+    application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "internalvideosink"));
+    GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
+    g_object_set (G_OBJECT (application.sink),
+        "sync", FALSE,
+        "caps", caps,
+        "max-buffers", static_cast<guint> (32),
+        "emit-signals", TRUE,
+        nullptr);
+    g_signal_connect (application.sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_preroll_sample (sink); }), &application);
+    g_signal_connect (application.sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_sample (sink); }), &application);
+    g_signal_connect (application.sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Application* application) { application->handle_sink_eos (sink); }), &application);
+    g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
+  }
+
   gst_bin_add (GST_BIN (application.pipeline), application.playbin);
   gst_element_sync_state_with_parent (application.playbin);
 
@@ -205,7 +293,7 @@ int main (int argc, char* argv[])
 
   set_pipeline_state (application.pipeline, GST_STATE_PLAYING);
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html?gi-language=c
+  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#getting-pipeline-graphs
   g_assert_true (message != nullptr);
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
@@ -227,5 +315,10 @@ int main (int argc, char* argv[])
 /*
 
 - use of playbin sink with caps & appsink to capture decoded video frames
+- separate caps filter
+- fakesink
+- filter log by appsink
+- write also buffer details
+- appsink from source
 
 */
