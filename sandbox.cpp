@@ -33,7 +33,17 @@ void set_pipeline_state (GstPipeline* pipeline, GstState state)
 
 struct Application {
   Application () = default;
-  ~Application () = default;
+  ~Application ()
+  {
+    if (source)
+      gst_object_unref (GST_OBJECT (std::exchange (source, nullptr)));
+    if (sink)
+      gst_object_unref (GST_OBJECT (std::exchange (sink, nullptr)));
+    if (playbin)
+      gst_object_unref (GST_OBJECT (std::exchange (playbin, nullptr)));
+    if (pipeline)
+      gst_object_unref (GST_OBJECT (std::exchange (pipeline, nullptr)));
+  }
 
   void push (std::atomic_bool& termination, std::string path)
   {
@@ -306,8 +316,6 @@ int main (int argc, char* argv[])
   gst_object_unref (std::exchange (bus, nullptr));
 
   gst_element_set_state (GST_ELEMENT_CAST (application.pipeline), GST_STATE_NULL);
-  gst_object_unref (std::exchange (application.playbin, nullptr));
-  gst_object_unref (std::exchange (application.pipeline, nullptr));
 
   return 0;
 }
