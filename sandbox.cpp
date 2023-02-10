@@ -45,6 +45,55 @@ struct Application {
       gst_object_unref (GST_OBJECT (std::exchange (pipeline, nullptr)));
   }
 
+  static std::string buffer_flags_to_string (guint flags)
+  {
+    static std::initializer_list<std::pair<guint, const char*>> const g_list { // clang-format off
+      #define IDENTIFIER(Name) std::make_pair<guint, const char*>(Name, #Name),
+      IDENTIFIER (GST_BUFFER_FLAG_LIVE)
+      IDENTIFIER (GST_BUFFER_FLAG_DECODE_ONLY)
+      IDENTIFIER (GST_BUFFER_FLAG_DISCONT)
+      IDENTIFIER (GST_BUFFER_FLAG_RESYNC)
+      IDENTIFIER (GST_BUFFER_FLAG_CORRUPTED)
+      IDENTIFIER (GST_BUFFER_FLAG_MARKER)
+      IDENTIFIER (GST_BUFFER_FLAG_HEADER)
+      IDENTIFIER (GST_BUFFER_FLAG_GAP)
+      IDENTIFIER (GST_BUFFER_FLAG_DROPPABLE)
+      IDENTIFIER (GST_BUFFER_FLAG_DELTA_UNIT)
+      IDENTIFIER (GST_BUFFER_FLAG_TAG_MEMORY)
+      IDENTIFIER (GST_BUFFER_FLAG_SYNC_AFTER)
+      IDENTIFIER (GST_BUFFER_FLAG_NON_DROPPABLE)
+      #undef IDENTIFIER
+    }; // clang-format on
+    std::ostringstream stream;
+    for (auto&& element : g_list)
+      if (flags & element.first)
+        stream << " | " << element.second;
+    auto string = stream.str ();
+    if (string.empty ())
+      return "0";
+    string.erase (0, 3);
+    return string;
+  }
+  static std::string buffer_to_string (GstBuffer* buffer)
+  {
+    std::ostringstream stream;
+    char text[256];
+    // sprintf (text, "flags 0x%04X", GST_BUFFER_FLAGS (buffer));
+    stream << buffer_flags_to_string (GST_BUFFER_FLAGS (buffer)); // text;
+    if (GST_BUFFER_DTS_IS_VALID (buffer)) {
+      sprintf (text, ", dts %.3f", GST_BUFFER_DTS (buffer) / 1E9);
+      stream << text;
+    }
+    if (GST_BUFFER_PTS_IS_VALID (buffer)) {
+      sprintf (text, ", pts %.3f", GST_BUFFER_PTS (buffer) / 1E9);
+      stream << text;
+    }
+    if (GST_BUFFER_DURATION_IS_VALID (buffer)) {
+      sprintf (text, ", duration %.3f", GST_BUFFER_DURATION (buffer) / 1E9);
+      stream << text;
+    }
+    return stream.str ();
+  }
   void push (std::atomic_bool& termination, std::string path)
   {
     std::ifstream stream;
@@ -74,18 +123,30 @@ struct Application {
           gst_caps_unref (caps);
         } break;
         case 2: {
+          uint64_t flags;
+          int64_t dts;
+          int64_t pts;
+          int64_t duration;
+          stream.read (reinterpret_cast<char*> (&flags), sizeof flags);
+          stream.read (reinterpret_cast<char*> (&dts), sizeof dts);
+          stream.read (reinterpret_cast<char*> (&pts), sizeof pts);
+          stream.read (reinterpret_cast<char*> (&duration), sizeof duration);
           uint32_t size;
           stream.read (reinterpret_cast<char*> (&size), sizeof size);
           std::vector<uint8_t> data;
           data.resize (size);
           stream.read (reinterpret_cast<char*> (data.data ()), data.size ());
           GstBuffer* buffer = gst_buffer_new_allocate (nullptr, size, nullptr);
+          GST_BUFFER_FLAGS (buffer) = static_cast<guint> (flags);
+          GST_BUFFER_DTS (buffer) = static_cast<GstClockTime> (dts);
+          GST_BUFFER_PTS (buffer) = static_cast<GstClockTime> (pts);
+          GST_BUFFER_DURATION (buffer) = static_cast<GstClockTime> (duration);
           gst_buffer_fill (buffer, 0, data.data (), data.size ());
           {
             std::unique_lock source_data_lock (source_data_mutex);
             source_data_condition.wait (source_data_lock, [&] { return source_data_need.load () || termination.load (); });
           }
-          GST_INFO ("gst_app_src_push_buffer");
+          GST_INFO ("gst_app_src_push_buffer: %s", buffer_to_string (buffer).c_str ());
           const auto result = gst_app_src_push_buffer (source, buffer);
           g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
         } break;
@@ -356,6 +417,9 @@ int main (int argc, char* argv[])
 GST_DEBUG_DUMP_DOT_DIR=~ GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
 GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
+
+roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
+roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
 
 - write also buffer details
 - appsink from source
