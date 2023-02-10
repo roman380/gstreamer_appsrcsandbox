@@ -279,18 +279,49 @@ int main (int argc, char* argv[])
   g_signal_connect (application.playbin, "element-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Application* application) { application->handle_element_setup (element); }), &application);
 
   {
-    application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "internalvideosink"));
-    GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
-    g_object_set (G_OBJECT (application.sink),
-        "sync", FALSE,
-        "caps", caps,
-        "max-buffers", static_cast<guint> (32),
-        "emit-signals", TRUE,
-        nullptr);
-    g_signal_connect (application.sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_preroll_sample (sink); }), &application);
-    g_signal_connect (application.sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_sample (sink); }), &application);
-    g_signal_connect (application.sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Application* application) { application->handle_sink_eos (sink); }), &application);
-    g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
+    const auto connect_sink_signals = [&] {
+      g_signal_connect (application.sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_preroll_sample (sink); }), &application);
+      g_signal_connect (application.sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_sample (sink); }), &application);
+      g_signal_connect (application.sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Application* application) { application->handle_sink_eos (sink); }), &application);
+    };
+
+    switch (0) {
+      case 0: {
+        application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
+        GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
+        g_object_set (G_OBJECT (application.sink),
+            "sync", FALSE,
+            "caps", caps,
+            "max-buffers", static_cast<guint> (32),
+            "emit-signals", TRUE,
+            nullptr);
+        connect_sink_signals ();
+        g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
+      } break;
+      case 1: {
+        auto capsfilter = gst_element_factory_make ("capsfilter", "video_caps"); // https://gstreamer.freedesktop.org/documentation/coreelements/capsfilter.html#capsfilter-page
+        GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
+        g_object_set (G_OBJECT (capsfilter),
+            "caps", caps,
+            nullptr);
+        application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
+        g_object_set (G_OBJECT (application.sink),
+            "sync", FALSE,
+            "max-buffers", static_cast<guint> (32),
+            "emit-signals", TRUE,
+            nullptr);
+        connect_sink_signals ();
+        auto sink_bin = GST_BIN_CAST (gst_bin_new ("sink_bin"));
+        gst_bin_add_many (sink_bin, capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
+        gst_element_link_many (capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
+        auto pad = gst_element_get_static_pad (capsfilter, "sink");
+        auto ghost_pad = gst_ghost_pad_new ("sink", pad);
+        gst_pad_set_active (ghost_pad, TRUE);
+        gst_element_add_pad (GST_ELEMENT_CAST (sink_bin), std::exchange (ghost_pad, nullptr));
+        gst_object_unref (std::exchange (pad, nullptr));
+        g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (sink_bin), nullptr);
+      } break;
+    }
   }
 
   gst_bin_add (GST_BIN (application.pipeline), application.playbin);
@@ -322,11 +353,12 @@ int main (int argc, char* argv[])
 
 /*
 
-- use of playbin sink with caps & appsink to capture decoded video frames
-- separate caps filter
-- fakesink
-- filter log by appsink
+GST_DEBUG_DUMP_DOT_DIR=~ GST_DEBUG=*:2,application:4 ./sandbox
+GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
+GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
+
 - write also buffer details
 - appsink from source
+- fakesink?
 
 */
