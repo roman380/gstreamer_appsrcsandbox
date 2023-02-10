@@ -421,8 +421,8 @@ GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
 roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
 roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
 
-- write also buffer details
-- appsink from source
+- appsink callbacks
 - fakesink?
+- appsink from source
 
 */
