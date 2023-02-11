@@ -47,7 +47,7 @@ struct Application {
 
   static std::string buffer_flags_to_string (guint flags)
   {
-    static std::initializer_list<std::pair<guint, const char*>> const g_list { // clang-format off
+    static const std::initializer_list<std::pair<guint, const char*>> g_list { // clang-format off
       #define IDENTIFIER(Name) std::make_pair<guint, const char*>(Name, #Name),
       IDENTIFIER (GST_BUFFER_FLAG_LIVE)
       IDENTIFIER (GST_BUFFER_FLAG_DECODE_ONLY)
@@ -341,9 +341,18 @@ int main (int argc, char* argv[])
 
   {
     const auto connect_sink_signals = [&] {
+      g_object_set (G_OBJECT (application.sink), "emit-signals", TRUE, nullptr);
       g_signal_connect (application.sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_preroll_sample (sink); }), &application);
       g_signal_connect (application.sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Application* application) -> GstFlowReturn { return application->handle_sink_sample (sink); }), &application);
       g_signal_connect (application.sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Application* application) { application->handle_sink_eos (sink); }), &application);
+    };
+    const auto set_sink_callbacks = [&] {
+      g_object_set (G_OBJECT (application.sink), "emit-signals", FALSE, nullptr);
+      GstAppSinkCallbacks callbacks;
+      callbacks.eos = ([] (GstAppSink* sink, gpointer application) { reinterpret_cast<Application*> (application)->handle_sink_eos (sink); });
+      callbacks.new_preroll = ([] (GstAppSink* sink, gpointer application) -> GstFlowReturn { return reinterpret_cast<Application*> (application)->handle_sink_preroll_sample (sink); });
+      callbacks.new_sample = ([] (GstAppSink* sink, gpointer application) -> GstFlowReturn { return reinterpret_cast<Application*> (application)->handle_sink_sample (sink); });
+      gst_app_sink_set_callbacks (application.sink, &callbacks, &application, nullptr);
     };
 
     switch (0) {
@@ -354,9 +363,8 @@ int main (int argc, char* argv[])
             "sync", FALSE,
             "caps", caps,
             "max-buffers", static_cast<guint> (32),
-            "emit-signals", TRUE,
             nullptr);
-        connect_sink_signals ();
+        set_sink_callbacks(); //connect_sink_signals ();
         g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
       } break;
       case 1: {
@@ -371,7 +379,7 @@ int main (int argc, char* argv[])
             "max-buffers", static_cast<guint> (32),
             "emit-signals", TRUE,
             nullptr);
-        connect_sink_signals ();
+        set_sink_callbacks(); //connect_sink_signals ();
         auto sink_bin = GST_BIN_CAST (gst_bin_new ("sink_bin"));
         gst_bin_add_many (sink_bin, capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
         gst_element_link_many (capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
@@ -421,7 +429,6 @@ GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
 roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
 roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
 
-- appsink callbacks
 - fakesink?
 - appsink from source
 
