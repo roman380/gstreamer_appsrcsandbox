@@ -68,6 +68,7 @@
 
 #include <gst/gst.h>
 #include <gst/base/base.h>
+#include <gst/video/video-info.h>
 
 #include <string.h>
 
@@ -1077,12 +1078,36 @@ gst_app_sink_getcaps (GstBaseSink * psink, GstCaps * filter)
 static gboolean
 gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 {
-  GST_DEBUG_OBJECT(query, "%s", GST_QUERY_TYPE_NAME(query));
+  GST_DEBUG_OBJECT(query, "%s", GST_QUERY_TYPE_NAME(query)); // https://gstreamer.freedesktop.org/documentation/additional/design/query.html
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
   gboolean ret;
 
   switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_ALLOCATION:
+    {
+      GstCaps* caps;
+      gst_query_parse_allocation (query, &caps, NULL);
+      if (caps == NULL)
+        return FALSE;
+      GstVideoInfo info;
+      if (!gst_video_info_from_caps (&info, caps))
+        return FALSE;
+      gsize size = GST_VIDEO_INFO_SIZE (&info);
+      GST_INFO ("info.width %d, .height %d, size %zu", info.width, info.height, size);
+      GstBufferPool* pool = gst_video_buffer_pool_new ();
+      GstStructure* structure = gst_buffer_pool_get_config (pool);
+      gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+      if (gst_buffer_pool_set_config (pool, structure)) {
+        gst_query_add_allocation_pool (query, pool, size, 0, 0);
+        gst_object_unref (pool);
+        gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+        return TRUE;
+      }
+      gst_object_unref (pool);
+      return FALSE;
+    }
+    break;
     case GST_QUERY_DRAIN:
     {
       g_mutex_lock (&priv->mutex);
