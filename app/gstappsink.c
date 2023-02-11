@@ -221,6 +221,7 @@ G_DEFINE_TYPE_WITH_CODE (GstAppSink, gst_app_sink, GST_TYPE_BASE_SINK,
 static void
 gst_app_sink_class_init (GstAppSinkClass * klass)
 {
+  GST_DEBUG("...");
   GObjectClass *gobject_class = (GObjectClass *) klass;
   GstElementClass *element_class = (GstElementClass *) klass;
   GstBaseSinkClass *basesink_class = (GstBaseSinkClass *) klass;
@@ -479,6 +480,7 @@ gst_app_sink_class_init (GstAppSinkClass * klass)
 static void
 gst_app_sink_init (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   priv = appsink->priv = gst_app_sink_get_instance_private (appsink);
@@ -499,6 +501,7 @@ gst_app_sink_init (GstAppSink * appsink)
 static void
 gst_app_sink_dispose (GObject * obj)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (obj);
   GstAppSinkPrivate *priv = appsink->priv;
   GstMiniObject *queue_obj;
@@ -533,6 +536,7 @@ gst_app_sink_dispose (GObject * obj)
 static void
 gst_app_sink_finalize (GObject * obj)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (obj);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -547,6 +551,7 @@ static void
 gst_app_sink_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (object);
 
   switch (prop_id) {
@@ -579,6 +584,7 @@ static void
 gst_app_sink_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (object);
 
   switch (prop_id) {
@@ -620,6 +626,7 @@ gst_app_sink_get_property (GObject * object, guint prop_id, GValue * value,
 static gboolean
 gst_app_sink_unlock_start (GstBaseSink * bsink)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -635,6 +642,7 @@ gst_app_sink_unlock_start (GstBaseSink * bsink)
 static gboolean
 gst_app_sink_unlock_stop (GstBaseSink * bsink)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -650,6 +658,7 @@ gst_app_sink_unlock_stop (GstBaseSink * bsink)
 static void
 gst_app_sink_flush_unlocked (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   GstMiniObject *obj;
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -665,6 +674,7 @@ gst_app_sink_flush_unlocked (GstAppSink * appsink)
 static gboolean
 gst_app_sink_start (GstBaseSink * psink)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -688,6 +698,7 @@ gst_app_sink_start (GstBaseSink * psink)
 static gboolean
 gst_app_sink_stop (GstBaseSink * psink)
 {
+  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -710,6 +721,11 @@ gst_app_sink_stop (GstBaseSink * psink)
 static gboolean
 gst_app_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 {
+  g_assert_nonnull(caps);
+  gchar* string = gst_caps_to_string(caps);
+  GST_DEBUG("caps %s", string);
+  g_free(string);
+
   GstAppSink *appsink = GST_APP_SINK_CAST (sink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -726,6 +742,7 @@ gst_app_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 static gboolean
 gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
 {
+  GST_DEBUG_OBJECT(event, "...", GST_EVENT_TYPE_NAME(event));
   GstAppSink *appsink = GST_APP_SINK_CAST (sink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -811,6 +828,7 @@ gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
 static GstFlowReturn
 gst_app_sink_preroll (GstBaseSink * psink, GstBuffer * buffer)
 {
+  GST_DEBUG("...");
   GstFlowReturn res;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
@@ -856,6 +874,7 @@ flushing:
 static GstMiniObject *
 dequeue_buffer (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv = appsink->priv;
   GstMiniObject *obj;
 
@@ -902,6 +921,7 @@ static GstFlowReturn
 gst_app_sink_render_common (GstBaseSink * psink, GstMiniObject * data,
     gboolean is_list)
 {
+  GST_DEBUG("...");
   GstFlowReturn ret;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
@@ -997,6 +1017,7 @@ stopping:
 static GstFlowReturn
 gst_app_sink_render (GstBaseSink * psink, GstBuffer * buffer)
 {
+  GST_DEBUG("...");
   return gst_app_sink_render_common (psink, GST_MINI_OBJECT_CAST (buffer),
       FALSE);
 }
@@ -1004,6 +1025,7 @@ gst_app_sink_render (GstBaseSink * psink, GstBuffer * buffer)
 static GstFlowReturn
 gst_app_sink_render_list (GstBaseSink * sink, GstBufferList * list)
 {
+  GST_DEBUG("...");
   GstFlowReturn flow;
   GstAppSink *appsink;
   GstBuffer *buffer;
@@ -1034,6 +1056,7 @@ gst_app_sink_render_list (GstBaseSink * sink, GstBufferList * list)
 static GstCaps *
 gst_app_sink_getcaps (GstBaseSink * psink, GstCaps * filter)
 {
+  GST_DEBUG("...");
   GstCaps *caps;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
@@ -1054,6 +1077,7 @@ gst_app_sink_getcaps (GstBaseSink * psink, GstCaps * filter)
 static gboolean
 gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 {
+  GST_DEBUG_OBJECT(query, "%s", GST_QUERY_TYPE_NAME(query));
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
   gboolean ret;
@@ -1103,6 +1127,7 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
       break;
   }
 
+  GST_DEBUG("ret %d", ret);
   return ret;
 }
 
@@ -1121,6 +1146,7 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 void
 gst_app_sink_set_caps (GstAppSink * appsink, const GstCaps * caps)
 {
+  GST_DEBUG("...");
   GstCaps *old;
   GstAppSinkPrivate *priv;
 
@@ -1152,6 +1178,7 @@ gst_app_sink_set_caps (GstAppSink * appsink, const GstCaps * caps)
 GstCaps *
 gst_app_sink_get_caps (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   GstCaps *caps;
   GstAppSinkPrivate *priv;
 
@@ -1183,6 +1210,7 @@ gst_app_sink_get_caps (GstAppSink * appsink)
 gboolean
 gst_app_sink_is_eos (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   gboolean ret;
   GstAppSinkPrivate *priv;
 
@@ -1225,6 +1253,7 @@ not_started:
 void
 gst_app_sink_set_emit_signals (GstAppSink * appsink, gboolean emit)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1248,6 +1277,7 @@ gst_app_sink_set_emit_signals (GstAppSink * appsink, gboolean emit)
 gboolean
 gst_app_sink_get_emit_signals (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1274,6 +1304,7 @@ gst_app_sink_get_emit_signals (GstAppSink * appsink)
 void
 gst_app_sink_set_max_buffers (GstAppSink * appsink, guint max)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1300,6 +1331,7 @@ gst_app_sink_set_max_buffers (GstAppSink * appsink, guint max)
 guint
 gst_app_sink_get_max_buffers (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   guint result;
   GstAppSinkPrivate *priv;
 
@@ -1325,6 +1357,7 @@ gst_app_sink_get_max_buffers (GstAppSink * appsink)
 void
 gst_app_sink_set_drop (GstAppSink * appsink, gboolean drop)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1353,6 +1386,7 @@ gst_app_sink_set_drop (GstAppSink * appsink, gboolean drop)
 gboolean
 gst_app_sink_get_drop (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1383,6 +1417,7 @@ void
 gst_app_sink_set_buffer_list_support (GstAppSink * appsink,
     gboolean enable_lists)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1409,6 +1444,7 @@ gst_app_sink_set_buffer_list_support (GstAppSink * appsink,
 gboolean
 gst_app_sink_get_buffer_list_support (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1434,6 +1470,7 @@ gst_app_sink_get_buffer_list_support (GstAppSink * appsink)
 void
 gst_app_sink_set_wait_on_eos (GstAppSink * appsink, gboolean wait)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1462,6 +1499,7 @@ gst_app_sink_set_wait_on_eos (GstAppSink * appsink, gboolean wait)
 gboolean
 gst_app_sink_get_wait_on_eos (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1505,6 +1543,7 @@ gst_app_sink_get_wait_on_eos (GstAppSink * appsink)
 GstSample *
 gst_app_sink_pull_preroll (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   return gst_app_sink_try_pull_preroll (appsink, GST_CLOCK_TIME_NONE);
 }
 
@@ -1530,6 +1569,7 @@ gst_app_sink_pull_preroll (GstAppSink * appsink)
 GstSample *
 gst_app_sink_pull_sample (GstAppSink * appsink)
 {
+  GST_DEBUG("...");
   return gst_app_sink_try_pull_sample (appsink, GST_CLOCK_TIME_NONE);
 }
 
@@ -1566,6 +1606,7 @@ gst_app_sink_pull_sample (GstAppSink * appsink)
 GstSample *
 gst_app_sink_try_pull_preroll (GstAppSink * appsink, GstClockTime timeout)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
   GstSample *sample = NULL;
   gboolean timeout_valid;
@@ -1662,6 +1703,7 @@ not_started:
 GstSample *
 gst_app_sink_try_pull_sample (GstAppSink * appsink, GstClockTime timeout)
 {
+  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
   GstSample *sample = NULL;
   GstMiniObject *obj;
@@ -1770,6 +1812,7 @@ void
 gst_app_sink_set_callbacks (GstAppSink * appsink,
     GstAppSinkCallbacks * callbacks, gpointer user_data, GDestroyNotify notify)
 {
+  GST_DEBUG("...");
   Callbacks *old_callbacks, *new_callbacks = NULL;
   GstAppSinkPrivate *priv;
 
@@ -1799,12 +1842,14 @@ gst_app_sink_set_callbacks (GstAppSink * appsink,
 static GstURIType
 gst_app_sink_uri_get_type (GType type)
 {
+  GST_DEBUG("...");
   return GST_URI_SINK;
 }
 
 static const gchar *const *
 gst_app_sink_uri_get_protocols (GType type)
 {
+  GST_DEBUG("...");
   static const gchar *protocols[] = { "appsink", NULL };
 
   return protocols;
@@ -1813,6 +1858,7 @@ gst_app_sink_uri_get_protocols (GType type)
 static gchar *
 gst_app_sink_uri_get_uri (GstURIHandler * handler)
 {
+  GST_DEBUG("...");
   return g_strdup ("appsink");
 }
 
@@ -1820,6 +1866,7 @@ static gboolean
 gst_app_sink_uri_set_uri (GstURIHandler * handler, const gchar * uri,
     GError ** error)
 {
+  GST_DEBUG("...");
   /* GstURIHandler checks the protocol for us */
   return TRUE;
 }
@@ -1827,6 +1874,7 @@ gst_app_sink_uri_set_uri (GstURIHandler * handler, const gchar * uri,
 static void
 gst_app_sink_uri_handler_init (gpointer g_iface, gpointer iface_data)
 {
+  GST_DEBUG("...");
   GstURIHandlerInterface *iface = (GstURIHandlerInterface *) g_iface;
 
   iface->get_type = gst_app_sink_uri_get_type;
