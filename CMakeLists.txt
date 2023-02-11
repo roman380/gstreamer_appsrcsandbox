@@ -22,7 +22,7 @@ if(WITH_APPSINK)
     list(APPEND SOURCE app/gstappsink.c)
 endif()
 set(LIBRARY gstvideo-1.0 gstbase-1.0)
-if(NOT WITH_APPSINK OR NOT WIN32)
+if(NOT WITH_APPSINK)
     list(APPEND LIBRARY gstapp-1.0)
 endif()
 

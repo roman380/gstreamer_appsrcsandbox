@@ -68,7 +68,6 @@
 
 #include <gst/gst.h>
 #include <gst/base/base.h>
-#include <gst/video/video-info.h>
 
 #include <string.h>
 
@@ -1010,22 +1009,22 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
       GstCaps* caps;
       gst_query_parse_allocation (query, &caps, NULL);
       if (caps != NULL) {
-        GstVideoInfo info;
+      GstVideoInfo info;
         if (gst_video_info_from_caps (&info, caps)) {
-          gsize size = GST_VIDEO_INFO_SIZE (&info);
-          GST_INFO ("info.width %d, .height %d, size %zu", info.width, info.height, size);
-          GstBufferPool* pool = gst_video_buffer_pool_new ();
-          GstStructure* structure = gst_buffer_pool_get_config (pool);
-          gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
-          if (gst_buffer_pool_set_config (pool, structure)) {
-            gst_query_add_allocation_pool (query, pool, size, 0, 0);
-            gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+      gsize size = GST_VIDEO_INFO_SIZE (&info);
+      GST_INFO ("info.width %d, .height %d, size %zu", info.width, info.height, size);
+      GstBufferPool* pool = gst_video_buffer_pool_new ();
+      GstStructure* structure = gst_buffer_pool_get_config (pool);
+      gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+      if (gst_buffer_pool_set_config (pool, structure)) {
+        gst_query_add_allocation_pool (query, pool, size, 0, 0);
+        gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
             ret = TRUE;
-          }
-          gst_object_unref (pool);
-        }
       }
-      break;
+      gst_object_unref (pool);
+        }
+    }
+    break;
     }
     case GST_QUERY_DRAIN:
     {
