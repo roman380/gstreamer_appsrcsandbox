@@ -343,6 +343,10 @@ inline void add_debug_output_log_function ()
 
 // Table of Concepts https://gstreamer.freedesktop.org/documentation/tutorials/table-of-concepts.html#table-of-concepts
 
+#include "app/gstappsink.h"
+
+GST_PLUGIN_STATIC_DECLARE (appsink);
+
 int main (int argc, char* argv[])
 {
   GError* error = nullptr;
@@ -364,6 +368,17 @@ int main (int argc, char* argv[])
   gst_debug_set_default_threshold (GST_LEVEL_INFO);
   // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
 #endif
+
+  const auto registry = gst_registry_get ();
+  {
+    auto feature = gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY);
+    GST_INFO_OBJECT (feature, "feature");
+    g_assert_nonnull (feature);
+    gst_registry_remove_feature (registry, feature);
+    gst_object_unref (std::exchange (feature, nullptr));
+    g_assert_null (gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY));
+  }
+  gst_element_register (nullptr, "appsink", GST_RANK_NONE, GST_TYPE_APP_SINK);
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
@@ -480,5 +495,10 @@ GST_DEBUG_DUMP_DOT_DIR=~/gstreamer_appsrcsandbox/build GST_DEBUG=*:2,application
 GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
 GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
 GST_DEBUG=*:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc-Video -v 2
+
+roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
+roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
+
+- fakesink?
 
 */
