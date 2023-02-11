@@ -182,6 +182,7 @@ struct Application {
   void handle_enough_data ()
   {
     GST_WARNING ("handle_enough_data");
+    // GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox-handle_enough_data");
     std::unique_lock source_data_lock (source_data_mutex);
     source_data_need.store (false);
     source_data_condition.notify_all ();
@@ -189,6 +190,7 @@ struct Application {
   void handle_need_data ()
   {
     GST_WARNING ("handle_need_data");
+    // GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox-handle_need_data");
     std::unique_lock source_data_lock (source_data_mutex);
     source_data_need.store (true);
     source_data_condition.notify_all ();
@@ -330,11 +332,11 @@ int main (int argc, char* argv[])
   g_signal_connect (G_OBJECT (bus), "message::eos", G_CALLBACK (+[] (GstBus* bus, GstMessage* message, Application* application) -> void { application->handle_bus_eos_message (bus, message); }), &application);
   g_signal_connect (G_OBJECT (bus), "message::state-changed", G_CALLBACK (+[] (GstBus* bus, GstMessage* message, Application* application) -> void { application->handle_bus_state_changed_message (bus, message); }), &application);
 
-  application.playbin = gst_element_factory_make ("playbin", nullptr);
+  application.playbin = gst_element_factory_make ("playbin", nullptr); // https://gstreamer.freedesktop.org/documentation/playback/playbin.html#properties
   g_assert_nonnull (application.playbin);
   g_object_set (application.playbin,
       "uri", "appsrc://",
-      "flags", 3, // static_cast<GstPlayFlags>(GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO),
+      "flags", 3, // static_cast<GstPlayFlags>(GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO), // https://gstreamer.freedesktop.org/documentation/playback/playsink.html#GstPlayFlags
       nullptr);
   g_signal_connect (application.playbin, "source-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Application* application) { application->handle_source_setup (element); }), &application);
   g_signal_connect (application.playbin, "element-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Application* application) { application->handle_element_setup (element); }), &application);
@@ -403,7 +405,9 @@ int main (int argc, char* argv[])
 
   set_pipeline_state (application.pipeline, GST_STATE_PLAYING);
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox"); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#getting-pipeline-graphs
+  // NOTE: https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#getting-pipeline-graphs
+  //       https://dreampuf.github.io/GraphvizOnline
+  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox.dot");
   g_assert_true (message != nullptr);
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
@@ -423,6 +427,7 @@ int main (int argc, char* argv[])
 /*
 
 GST_DEBUG_DUMP_DOT_DIR=~ GST_DEBUG=*:2,application:4 ./sandbox
+GST_DEBUG_DUMP_DOT_DIR=~/gstreamer_appsrcsandbox/build GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
 GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
 

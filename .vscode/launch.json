@@ -7,7 +7,7 @@
         {
             "name": "sandbox",
             "type": "cppdbg",
-            "request": "launch",
+            "request": "launch", // launch, attach
             "program": "${workspaceFolder}/build/sandbox",
             "args": [],
             "stopAtEntry": false,
