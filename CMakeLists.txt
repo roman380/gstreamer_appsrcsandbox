@@ -11,8 +11,6 @@ pkg_check_modules(GLIB REQUIRED glib-2.0)
 pkg_check_modules(GST REQUIRED gstreamer-1.0)
 pkg_check_modules(GST_BASE REQUIRED gstreamer-plugins-base-1.0)
 
-add_definitions(${GTK2_CFLAGS_OTHER})
-
 add_executable(sandbox sandbox.cpp)
 
 target_include_directories(sandbox PRIVATE ${GST_INCLUDE_DIRS} ${GST_BASE_INCLUDE_DIRS})
