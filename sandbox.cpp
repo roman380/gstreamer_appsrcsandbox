@@ -119,6 +119,14 @@ struct Application {
           }
           GstCaps* caps = gst_caps_from_string (caps_string.c_str ());
           GST_INFO ("gst_app_src_set_caps: %s", caps_string.c_str ());
+          #if 0
+          {
+            gst_caps_set_simple (caps, "stream-format", G_TYPE_STRING, "byte-stream", nullptr);
+            gchar* caps_string = gst_caps_to_string (caps);
+            GST_INFO ("gst_app_src_set_caps: %s", caps_string);
+            g_free (caps_string);
+          }
+          #endif
           gst_app_src_set_caps (source, caps);
           gst_caps_unref (caps);
         } break;
@@ -360,7 +368,7 @@ int main (int argc, char* argv[])
     // NOTE: 0 - default sink, visual rendering
     //       1 - appsink, restricted to I420
     //       2 - bin with capsfilter and appsink, restricted to I420
-    switch (1) {
+    switch (0) {
       case 0:
         break;
       case 1: {
