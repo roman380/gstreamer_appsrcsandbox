@@ -4,6 +4,7 @@
 #include <string>
 #include <sstream>
 #include <filesystem>
+//#include <experimental/filesystem>
 #include <fstream>
 #include <atomic>
 #include <mutex>
@@ -170,7 +171,7 @@ struct Application {
 
   void handle_source_setup (GstElement* element)
   {
-    GST_INFO_OBJECT (element, "playbin source setup, %hs", GST_ELEMENT_NAME (element));
+    GST_INFO_OBJECT (element, "playbin source setup, %s", GST_ELEMENT_NAME (element));
     source = GST_APP_SRC (element);
     gst_object_ref (GST_OBJECT_CAST (source));
     g_object_set (source, // https://gstreamer.freedesktop.org/documentation/app/appsrc.html?gi-language=c
@@ -184,7 +185,7 @@ struct Application {
   }
   void handle_element_setup (GstElement* element)
   {
-    GST_INFO_OBJECT (element, "playbin element setup, %hs", GST_ELEMENT_NAME (element));
+    GST_INFO_OBJECT (element, "playbin element setup, %s", GST_ELEMENT_NAME (element));
   }
 
   void handle_enough_data ()
@@ -412,7 +413,8 @@ int main (int argc, char* argv[])
   gst_element_sync_state_with_parent (application.playbin);
 
   std::string path = "../data/AppSrc-Video";
-  std::replace (path.begin (), path.end (), '/', static_cast<char> (std::filesystem::path::preferred_separator));
+  std::replace (path.begin (), path.end (), '/', static_cast<char> (std:://experimental::
+    filesystem::path::preferred_separator));
   std::atomic_bool push_thread_termination = false;
   std::thread push_thread ([&] { application.push (push_thread_termination, path); });
 
@@ -420,7 +422,7 @@ int main (int argc, char* argv[])
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
   // NOTE: https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#getting-pipeline-graphs
   //       https://dreampuf.github.io/GraphvizOnline
-  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox.dot");
+  GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox");
   g_assert_true (message != nullptr);
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
