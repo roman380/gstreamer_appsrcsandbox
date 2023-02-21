@@ -357,8 +357,13 @@ int main (int argc, char* argv[])
       gst_app_sink_set_callbacks (application.sink, &callbacks, &application, nullptr);
     };
 
-    switch (0) {
-      case 0: {
+    // NOTE: 0 - default sink, visual rendering
+    //       1 - appsink, restricted to I420
+    //       2 - bin with capsfilter and appsink, restricted to I420
+    switch (1) {
+      case 0:
+        break;
+      case 1: {
         application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
         GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
         g_object_set (G_OBJECT (application.sink),
@@ -369,7 +374,7 @@ int main (int argc, char* argv[])
         set_sink_callbacks(); //connect_sink_signals ();
         g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
       } break;
-      case 1: {
+      case 2: {
         auto capsfilter = gst_element_factory_make ("capsfilter", "video_caps"); // https://gstreamer.freedesktop.org/documentation/coreelements/capsfilter.html#capsfilter-page
         GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
         g_object_set (G_OBJECT (capsfilter),
