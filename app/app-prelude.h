@@ -24,10 +24,8 @@
 
 #include <gst/gst.h>
 
-#ifdef BUILDING_GST_APP
-#define GST_APP_API GST_API_EXPORT         /* from config.h */
-#else
-#define GST_APP_API GST_API_IMPORT
+#ifndef GST_APP_API
+#define GST_APP_API GST_EXPORT
 #endif
 
 #endif /* __GST_APP_PRELUDE_H__ */

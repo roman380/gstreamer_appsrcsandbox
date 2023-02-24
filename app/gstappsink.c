@@ -81,34 +81,6 @@ typedef enum
   APP_WAITING = 1 << 1,         /* application thread is waiting for streaming thread */
 } GstAppSinkWaitStatus;
 
-typedef struct
-{
-  GstAppSinkCallbacks callbacks;
-  gpointer user_data;
-  GDestroyNotify destroy_notify;
-  gint ref_count;
-} Callbacks;
-
-static Callbacks *
-callbacks_ref (Callbacks * callbacks)
-{
-  g_atomic_int_inc (&callbacks->ref_count);
-
-  return callbacks;
-}
-
-static void
-callbacks_unref (Callbacks * callbacks)
-{
-  if (!g_atomic_int_dec_and_test (&callbacks->ref_count))
-    return;
-
-  if (callbacks->destroy_notify)
-    callbacks->destroy_notify (callbacks->user_data);
-
-  g_free (callbacks);
-}
-
 struct _GstAppSinkPrivate
 {
   GstCaps *caps;
@@ -133,9 +105,9 @@ struct _GstAppSinkPrivate
   gboolean is_eos;
   gboolean buffer_lists_supported;
 
-  Callbacks *callbacks;
-
-  GstSample *sample;
+  GstAppSinkCallbacks callbacks;
+  gpointer user_data;
+  GDestroyNotify notify;
 };
 
 GST_DEBUG_CATEGORY_STATIC (app_sink_debug);
@@ -215,14 +187,12 @@ static guint gst_app_sink_signals[LAST_SIGNAL] = { 0 };
 
 #define gst_app_sink_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstAppSink, gst_app_sink, GST_TYPE_BASE_SINK,
-    G_ADD_PRIVATE (GstAppSink)
     G_IMPLEMENT_INTERFACE (GST_TYPE_URI_HANDLER,
         gst_app_sink_uri_handler_init));
 
 static void
 gst_app_sink_class_init (GstAppSinkClass * klass)
 {
-  GST_DEBUG("...");
   GObjectClass *gobject_class = (GObjectClass *) klass;
   GstElementClass *element_class = (GstElementClass *) klass;
   GstBaseSinkClass *basesink_class = (GstBaseSinkClass *) klass;
@@ -292,7 +262,7 @@ gst_app_sink_class_init (GstAppSinkClass * klass)
   gst_app_sink_signals[SIGNAL_EOS] =
       g_signal_new ("eos", G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST,
       G_STRUCT_OFFSET (GstAppSinkClass, eos),
-      NULL, NULL, NULL, G_TYPE_NONE, 0, G_TYPE_NONE);
+      NULL, NULL, g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
   /**
    * GstAppSink::new-preroll:
    * @appsink: the appsink element that emitted the signal
@@ -315,7 +285,7 @@ gst_app_sink_class_init (GstAppSinkClass * klass)
       NULL, NULL, NULL, GST_TYPE_FLOW_RETURN, 0, G_TYPE_NONE);
   /**
    * GstAppSink::new-sample:
-   * @appsink: the appsink element that emitted the signal
+   * @appsink: the appsink element that emited the signal
    *
    * Signal that a new sample is available.
    *
@@ -476,20 +446,22 @@ gst_app_sink_class_init (GstAppSinkClass * klass)
   klass->pull_sample = gst_app_sink_pull_sample;
   klass->try_pull_preroll = gst_app_sink_try_pull_preroll;
   klass->try_pull_sample = gst_app_sink_try_pull_sample;
+
+  g_type_class_add_private (klass, sizeof (GstAppSinkPrivate));
 }
 
 static void
 gst_app_sink_init (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
-  priv = appsink->priv = gst_app_sink_get_instance_private (appsink);
+  priv = appsink->priv =
+      G_TYPE_INSTANCE_GET_PRIVATE (appsink, GST_TYPE_APP_SINK,
+      GstAppSinkPrivate);
 
   g_mutex_init (&priv->mutex);
   g_cond_init (&priv->cond);
   priv->queue = gst_queue_array_new (16);
-  priv->sample = gst_sample_new (NULL, NULL, NULL, NULL);
 
   priv->emit_signals = DEFAULT_PROP_EMIT_SIGNALS;
   priv->max_buffers = DEFAULT_PROP_MAX_BUFFERS;
@@ -502,34 +474,30 @@ gst_app_sink_init (GstAppSink * appsink)
 static void
 gst_app_sink_dispose (GObject * obj)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (obj);
   GstAppSinkPrivate *priv = appsink->priv;
   GstMiniObject *queue_obj;
-  Callbacks *callbacks = NULL;
 
   GST_OBJECT_LOCK (appsink);
   if (priv->caps) {
     gst_caps_unref (priv->caps);
     priv->caps = NULL;
   }
+  if (priv->notify) {
+    priv->notify (priv->user_data);
+  }
+  priv->user_data = NULL;
+  priv->notify = NULL;
+
   GST_OBJECT_UNLOCK (appsink);
 
   g_mutex_lock (&priv->mutex);
-  if (priv->callbacks)
-    callbacks = g_steal_pointer (&priv->callbacks);
   while ((queue_obj = gst_queue_array_pop_head (priv->queue)))
     gst_mini_object_unref (queue_obj);
   gst_buffer_replace (&priv->preroll_buffer, NULL);
   gst_caps_replace (&priv->preroll_caps, NULL);
   gst_caps_replace (&priv->last_caps, NULL);
-  if (priv->sample) {
-    gst_sample_unref (priv->sample);
-    priv->sample = NULL;
-  }
   g_mutex_unlock (&priv->mutex);
-
-  g_clear_pointer (&callbacks, callbacks_unref);
 
   G_OBJECT_CLASS (parent_class)->dispose (obj);
 }
@@ -537,7 +505,6 @@ gst_app_sink_dispose (GObject * obj)
 static void
 gst_app_sink_finalize (GObject * obj)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (obj);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -552,7 +519,6 @@ static void
 gst_app_sink_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (object);
 
   switch (prop_id) {
@@ -585,7 +551,6 @@ static void
 gst_app_sink_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (object);
 
   switch (prop_id) {
@@ -627,7 +592,6 @@ gst_app_sink_get_property (GObject * object, guint prop_id, GValue * value,
 static gboolean
 gst_app_sink_unlock_start (GstBaseSink * bsink)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -643,7 +607,6 @@ gst_app_sink_unlock_start (GstBaseSink * bsink)
 static gboolean
 gst_app_sink_unlock_stop (GstBaseSink * bsink)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -659,7 +622,6 @@ gst_app_sink_unlock_stop (GstBaseSink * bsink)
 static void
 gst_app_sink_flush_unlocked (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   GstMiniObject *obj;
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -675,7 +637,6 @@ gst_app_sink_flush_unlocked (GstAppSink * appsink)
 static gboolean
 gst_app_sink_start (GstBaseSink * psink)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -686,11 +647,6 @@ gst_app_sink_start (GstBaseSink * psink)
   priv->started = TRUE;
   gst_segment_init (&priv->preroll_segment, GST_FORMAT_TIME);
   gst_segment_init (&priv->last_segment, GST_FORMAT_TIME);
-  priv->sample = gst_sample_make_writable (priv->sample);
-  gst_sample_set_buffer (priv->sample, NULL);
-  gst_sample_set_buffer_list (priv->sample, NULL);
-  gst_sample_set_caps (priv->sample, NULL);
-  gst_sample_set_segment (priv->sample, NULL);
   g_mutex_unlock (&priv->mutex);
 
   return TRUE;
@@ -699,7 +655,6 @@ gst_app_sink_start (GstBaseSink * psink)
 static gboolean
 gst_app_sink_stop (GstBaseSink * psink)
 {
-  GST_DEBUG("...");
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -722,11 +677,6 @@ gst_app_sink_stop (GstBaseSink * psink)
 static gboolean
 gst_app_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 {
-  g_assert_nonnull(caps);
-  gchar* string = gst_caps_to_string(caps);
-  GST_DEBUG("caps %s", string);
-  g_free(string);
-
   GstAppSink *appsink = GST_APP_SINK_CAST (sink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -743,7 +693,6 @@ gst_app_sink_setcaps (GstBaseSink * sink, GstCaps * caps)
 static gboolean
 gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
 {
-  GST_DEBUG_OBJECT(event, "...", GST_EVENT_TYPE_NAME(event));
   GstAppSink *appsink = GST_APP_SINK_CAST (sink);
   GstAppSinkPrivate *priv = appsink->priv;
 
@@ -758,7 +707,6 @@ gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
       break;
     case GST_EVENT_EOS:{
       gboolean emit = TRUE;
-      Callbacks *callbacks = NULL;
 
       g_mutex_lock (&priv->mutex);
       GST_DEBUG_OBJECT (appsink, "receiving EOS");
@@ -792,19 +740,14 @@ gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
       }
       if (priv->flushing)
         emit = FALSE;
-
-      if (emit && priv->callbacks)
-        callbacks = callbacks_ref (priv->callbacks);
       g_mutex_unlock (&priv->mutex);
 
       if (emit) {
         /* emit EOS now */
-        if (callbacks && callbacks->callbacks.eos)
-          callbacks->callbacks.eos (appsink, callbacks->user_data);
+        if (priv->callbacks.eos)
+          priv->callbacks.eos (appsink, priv->user_data);
         else
           g_signal_emit (appsink, gst_app_sink_signals[SIGNAL_EOS], 0);
-
-        g_clear_pointer (&callbacks, callbacks_unref);
       }
 
       break;
@@ -829,12 +772,10 @@ gst_app_sink_event (GstBaseSink * sink, GstEvent * event)
 static GstFlowReturn
 gst_app_sink_preroll (GstBaseSink * psink, GstBuffer * buffer)
 {
-  GST_DEBUG("...");
   GstFlowReturn res;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
   gboolean emit;
-  Callbacks *callbacks = NULL;
 
   g_mutex_lock (&priv->mutex);
   if (priv->flushing)
@@ -847,20 +788,16 @@ gst_app_sink_preroll (GstBaseSink * psink, GstBuffer * buffer)
     g_cond_signal (&priv->cond);
 
   emit = priv->emit_signals;
-  if (priv->callbacks)
-    callbacks = callbacks_ref (priv->callbacks);
   g_mutex_unlock (&priv->mutex);
 
-  if (callbacks && callbacks->callbacks.new_preroll) {
-    res = callbacks->callbacks.new_preroll (appsink, callbacks->user_data);
+  if (priv->callbacks.new_preroll) {
+    res = priv->callbacks.new_preroll (appsink, priv->user_data);
   } else {
     res = GST_FLOW_OK;
     if (emit)
       g_signal_emit (appsink, gst_app_sink_signals[SIGNAL_NEW_PREROLL], 0,
           &res);
   }
-
-  g_clear_pointer (&callbacks, callbacks_unref);
 
   return res;
 
@@ -875,7 +812,6 @@ flushing:
 static GstMiniObject *
 dequeue_buffer (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv = appsink->priv;
   GstMiniObject *obj;
 
@@ -897,14 +833,10 @@ dequeue_buffer (GstAppSink * appsink)
           gst_event_parse_caps (event, &caps);
           GST_DEBUG_OBJECT (appsink, "activating caps %" GST_PTR_FORMAT, caps);
           gst_caps_replace (&priv->last_caps, caps);
-          priv->sample = gst_sample_make_writable (priv->sample);
-          gst_sample_set_caps (priv->sample, priv->last_caps);
           break;
         }
         case GST_EVENT_SEGMENT:
           gst_event_copy_segment (event, &priv->last_segment);
-          priv->sample = gst_sample_make_writable (priv->sample);
-          gst_sample_set_segment (priv->sample, &priv->last_segment);
           GST_DEBUG_OBJECT (appsink, "activated segment %" GST_SEGMENT_FORMAT,
               &priv->last_segment);
           break;
@@ -922,12 +854,10 @@ static GstFlowReturn
 gst_app_sink_render_common (GstBaseSink * psink, GstMiniObject * data,
     gboolean is_list)
 {
-  GST_DEBUG("...");
   GstFlowReturn ret;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
   gboolean emit;
-  Callbacks *callbacks = NULL;
 
 restart:
   g_mutex_lock (&priv->mutex);
@@ -939,7 +869,6 @@ restart:
   if (G_UNLIKELY (!priv->last_caps &&
           gst_pad_has_current_caps (GST_BASE_SINK_PAD (psink)))) {
     priv->last_caps = gst_pad_get_current_caps (GST_BASE_SINK_PAD (psink));
-    gst_sample_set_caps (priv->sample, priv->last_caps);
     GST_DEBUG_OBJECT (appsink, "activating pad caps %" GST_PTR_FORMAT,
         priv->last_caps);
   }
@@ -987,19 +916,15 @@ restart:
     g_cond_signal (&priv->cond);
 
   emit = priv->emit_signals;
-  if (priv->callbacks)
-    callbacks = callbacks_ref (priv->callbacks);
   g_mutex_unlock (&priv->mutex);
 
-  if (callbacks && callbacks->callbacks.new_sample) {
-    ret = callbacks->callbacks.new_sample (appsink, callbacks->user_data);
+  if (priv->callbacks.new_sample) {
+    ret = priv->callbacks.new_sample (appsink, priv->user_data);
   } else {
     ret = GST_FLOW_OK;
     if (emit)
       g_signal_emit (appsink, gst_app_sink_signals[SIGNAL_NEW_SAMPLE], 0, &ret);
   }
-  g_clear_pointer (&callbacks, callbacks_unref);
-
   return ret;
 
 flushing:
@@ -1018,7 +943,6 @@ stopping:
 static GstFlowReturn
 gst_app_sink_render (GstBaseSink * psink, GstBuffer * buffer)
 {
-  GST_DEBUG("...");
   return gst_app_sink_render_common (psink, GST_MINI_OBJECT_CAST (buffer),
       FALSE);
 }
@@ -1026,7 +950,6 @@ gst_app_sink_render (GstBaseSink * psink, GstBuffer * buffer)
 static GstFlowReturn
 gst_app_sink_render_list (GstBaseSink * sink, GstBufferList * list)
 {
-  GST_DEBUG("...");
   GstFlowReturn flow;
   GstAppSink *appsink;
   GstBuffer *buffer;
@@ -1057,7 +980,6 @@ gst_app_sink_render_list (GstBaseSink * sink, GstBufferList * list)
 static GstCaps *
 gst_app_sink_getcaps (GstBaseSink * psink, GstCaps * filter)
 {
-  GST_DEBUG("...");
   GstCaps *caps;
   GstAppSink *appsink = GST_APP_SINK_CAST (psink);
   GstAppSinkPrivate *priv = appsink->priv;
@@ -1078,36 +1000,33 @@ gst_app_sink_getcaps (GstBaseSink * psink, GstCaps * filter)
 static gboolean
 gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 {
-  GST_DEBUG_OBJECT(query, "%s", GST_QUERY_TYPE_NAME(query)); // https://gstreamer.freedesktop.org/documentation/additional/design/query.html
   GstAppSink *appsink = GST_APP_SINK_CAST (bsink);
   GstAppSinkPrivate *priv = appsink->priv;
   gboolean ret;
 
   switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_ALLOCATION:
-    {
+    case GST_QUERY_ALLOCATION: {
+      ret = FALSE;
       GstCaps* caps;
       gst_query_parse_allocation (query, &caps, NULL);
-      if (caps == NULL)
-        return FALSE;
-      GstVideoInfo info;
-      if (!gst_video_info_from_caps (&info, caps))
-        return FALSE;
-      gsize size = GST_VIDEO_INFO_SIZE (&info);
-      GST_INFO ("info.width %d, .height %d, size %zu", info.width, info.height, size);
-      GstBufferPool* pool = gst_video_buffer_pool_new ();
-      GstStructure* structure = gst_buffer_pool_get_config (pool);
-      gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
-      if (gst_buffer_pool_set_config (pool, structure)) {
-        gst_query_add_allocation_pool (query, pool, size, 0, 0);
-        gst_object_unref (pool);
-        gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
-        return TRUE;
+      if (caps != NULL) {
+        GstVideoInfo info;
+        if (gst_video_info_from_caps (&info, caps)) {
+          gsize size = GST_VIDEO_INFO_SIZE (&info);
+          GST_INFO ("info.width %d, .height %d, size %zu", info.width, info.height, size);
+          GstBufferPool* pool = gst_video_buffer_pool_new ();
+          GstStructure* structure = gst_buffer_pool_get_config (pool);
+          gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+          if (gst_buffer_pool_set_config (pool, structure)) {
+            gst_query_add_allocation_pool (query, pool, size, 0, 0);
+            gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+            ret = TRUE;
+          }
+          gst_object_unref (pool);
+        }
       }
-      gst_object_unref (pool);
-      return FALSE;
+      break;
     }
-    break;
     case GST_QUERY_DRAIN:
     {
       g_mutex_lock (&priv->mutex);
@@ -1152,7 +1071,6 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
       break;
   }
 
-  GST_DEBUG("ret %d", ret);
   return ret;
 }
 
@@ -1161,7 +1079,7 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 /**
  * gst_app_sink_set_caps:
  * @appsink: a #GstAppSink
- * @caps: (nullable): caps to set
+ * @caps: caps to set
  *
  * Set the capabilities on the appsink element.  This function takes
  * a copy of the caps structure. After calling this method, the sink will only
@@ -1171,7 +1089,6 @@ gst_app_sink_query (GstBaseSink * bsink, GstQuery * query)
 void
 gst_app_sink_set_caps (GstAppSink * appsink, const GstCaps * caps)
 {
-  GST_DEBUG("...");
   GstCaps *old;
   GstAppSinkPrivate *priv;
 
@@ -1203,7 +1120,6 @@ gst_app_sink_set_caps (GstAppSink * appsink, const GstCaps * caps)
 GstCaps *
 gst_app_sink_get_caps (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   GstCaps *caps;
   GstAppSinkPrivate *priv;
 
@@ -1235,7 +1151,6 @@ gst_app_sink_get_caps (GstAppSink * appsink)
 gboolean
 gst_app_sink_is_eos (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   gboolean ret;
   GstAppSinkPrivate *priv;
 
@@ -1278,7 +1193,6 @@ not_started:
 void
 gst_app_sink_set_emit_signals (GstAppSink * appsink, gboolean emit)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1296,13 +1210,12 @@ gst_app_sink_set_emit_signals (GstAppSink * appsink, gboolean emit)
  *
  * Check if appsink will emit the "new-preroll" and "new-sample" signals.
  *
- * Returns: %TRUE if @appsink is emitting the "new-preroll" and "new-sample"
+ * Returns: %TRUE if @appsink is emiting the "new-preroll" and "new-sample"
  * signals.
  */
 gboolean
 gst_app_sink_get_emit_signals (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1329,7 +1242,6 @@ gst_app_sink_get_emit_signals (GstAppSink * appsink)
 void
 gst_app_sink_set_max_buffers (GstAppSink * appsink, guint max)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1356,7 +1268,6 @@ gst_app_sink_set_max_buffers (GstAppSink * appsink, guint max)
 guint
 gst_app_sink_get_max_buffers (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   guint result;
   GstAppSinkPrivate *priv;
 
@@ -1382,7 +1293,6 @@ gst_app_sink_get_max_buffers (GstAppSink * appsink)
 void
 gst_app_sink_set_drop (GstAppSink * appsink, gboolean drop)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1411,7 +1321,6 @@ gst_app_sink_set_drop (GstAppSink * appsink, gboolean drop)
 gboolean
 gst_app_sink_get_drop (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1442,7 +1351,6 @@ void
 gst_app_sink_set_buffer_list_support (GstAppSink * appsink,
     gboolean enable_lists)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1469,7 +1377,6 @@ gst_app_sink_set_buffer_list_support (GstAppSink * appsink,
 gboolean
 gst_app_sink_get_buffer_list_support (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1495,7 +1402,6 @@ gst_app_sink_get_buffer_list_support (GstAppSink * appsink)
 void
 gst_app_sink_set_wait_on_eos (GstAppSink * appsink, gboolean wait)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1524,7 +1430,6 @@ gst_app_sink_set_wait_on_eos (GstAppSink * appsink, gboolean wait)
 gboolean
 gst_app_sink_get_wait_on_eos (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   gboolean result;
   GstAppSinkPrivate *priv;
 
@@ -1568,7 +1473,6 @@ gst_app_sink_get_wait_on_eos (GstAppSink * appsink)
 GstSample *
 gst_app_sink_pull_preroll (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   return gst_app_sink_try_pull_preroll (appsink, GST_CLOCK_TIME_NONE);
 }
 
@@ -1594,7 +1498,6 @@ gst_app_sink_pull_preroll (GstAppSink * appsink)
 GstSample *
 gst_app_sink_pull_sample (GstAppSink * appsink)
 {
-  GST_DEBUG("...");
   return gst_app_sink_try_pull_sample (appsink, GST_CLOCK_TIME_NONE);
 }
 
@@ -1631,7 +1534,6 @@ gst_app_sink_pull_sample (GstAppSink * appsink)
 GstSample *
 gst_app_sink_try_pull_preroll (GstAppSink * appsink, GstClockTime timeout)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
   GstSample *sample = NULL;
   gboolean timeout_valid;
@@ -1728,7 +1630,6 @@ not_started:
 GstSample *
 gst_app_sink_try_pull_sample (GstAppSink * appsink, GstClockTime timeout)
 {
-  GST_DEBUG("...");
   GstAppSinkPrivate *priv;
   GstSample *sample = NULL;
   GstMiniObject *obj;
@@ -1774,16 +1675,12 @@ gst_app_sink_try_pull_sample (GstAppSink * appsink, GstClockTime timeout)
   obj = dequeue_buffer (appsink);
   if (GST_IS_BUFFER (obj)) {
     GST_DEBUG_OBJECT (appsink, "we have a buffer %p", obj);
-    priv->sample = gst_sample_make_writable (priv->sample);
-    gst_sample_set_buffer_list (priv->sample, NULL);
-    gst_sample_set_buffer (priv->sample, GST_BUFFER_CAST (obj));
-    sample = gst_sample_ref (priv->sample);
+    sample = gst_sample_new (GST_BUFFER_CAST (obj), priv->last_caps,
+        &priv->last_segment, NULL);
   } else {
     GST_DEBUG_OBJECT (appsink, "we have a list %p", obj);
-    priv->sample = gst_sample_make_writable (priv->sample);
-    gst_sample_set_buffer (priv->sample, NULL);
-    gst_sample_set_buffer_list (priv->sample, GST_BUFFER_LIST_CAST (obj));
-    sample = gst_sample_ref (priv->sample);
+    sample = gst_sample_new (NULL, priv->last_caps, &priv->last_segment, NULL);
+    gst_sample_set_buffer_list (sample, GST_BUFFER_LIST_CAST (obj));
   }
   gst_mini_object_unref (obj);
 
@@ -1829,16 +1726,12 @@ not_started:
  *
  * If callbacks are installed, no signals will be emitted for performance
  * reasons.
- *
- * Before 1.16.3 it was not possible to change the callbacks in a thread-safe
- * way.
  */
 void
 gst_app_sink_set_callbacks (GstAppSink * appsink,
     GstAppSinkCallbacks * callbacks, gpointer user_data, GDestroyNotify notify)
 {
-  GST_DEBUG("...");
-  Callbacks *old_callbacks, *new_callbacks = NULL;
+  GDestroyNotify old_notify;
   GstAppSinkPrivate *priv;
 
   g_return_if_fail (GST_IS_APP_SINK (appsink));
@@ -1846,20 +1739,26 @@ gst_app_sink_set_callbacks (GstAppSink * appsink,
 
   priv = appsink->priv;
 
-  if (callbacks) {
-    new_callbacks = g_new0 (Callbacks, 1);
-    new_callbacks->callbacks = *callbacks;
-    new_callbacks->user_data = user_data;
-    new_callbacks->destroy_notify = notify;
-    new_callbacks->ref_count = 1;
+  GST_OBJECT_LOCK (appsink);
+  old_notify = priv->notify;
+
+  if (old_notify) {
+    gpointer old_data;
+
+    old_data = priv->user_data;
+
+    priv->user_data = NULL;
+    priv->notify = NULL;
+    GST_OBJECT_UNLOCK (appsink);
+
+    old_notify (old_data);
+
+    GST_OBJECT_LOCK (appsink);
   }
-
-  g_mutex_lock (&priv->mutex);
-  old_callbacks = g_steal_pointer (&priv->callbacks);
-  priv->callbacks = g_steal_pointer (&new_callbacks);
-  g_mutex_unlock (&priv->mutex);
-
-  g_clear_pointer (&old_callbacks, callbacks_unref);
+  priv->callbacks = *callbacks;
+  priv->user_data = user_data;
+  priv->notify = notify;
+  GST_OBJECT_UNLOCK (appsink);
 }
 
 /*** GSTURIHANDLER INTERFACE *************************************************/
@@ -1867,14 +1766,12 @@ gst_app_sink_set_callbacks (GstAppSink * appsink,
 static GstURIType
 gst_app_sink_uri_get_type (GType type)
 {
-  GST_DEBUG("...");
   return GST_URI_SINK;
 }
 
 static const gchar *const *
 gst_app_sink_uri_get_protocols (GType type)
 {
-  GST_DEBUG("...");
   static const gchar *protocols[] = { "appsink", NULL };
 
   return protocols;
@@ -1883,7 +1780,6 @@ gst_app_sink_uri_get_protocols (GType type)
 static gchar *
 gst_app_sink_uri_get_uri (GstURIHandler * handler)
 {
-  GST_DEBUG("...");
   return g_strdup ("appsink");
 }
 
@@ -1891,7 +1787,6 @@ static gboolean
 gst_app_sink_uri_set_uri (GstURIHandler * handler, const gchar * uri,
     GError ** error)
 {
-  GST_DEBUG("...");
   /* GstURIHandler checks the protocol for us */
   return TRUE;
 }
@@ -1899,7 +1794,6 @@ gst_app_sink_uri_set_uri (GstURIHandler * handler, const gchar * uri,
 static void
 gst_app_sink_uri_handler_init (gpointer g_iface, gpointer iface_data)
 {
-  GST_DEBUG("...");
   GstURIHandlerInterface *iface = (GstURIHandlerInterface *) g_iface;
 
   iface->get_type = gst_app_sink_uri_get_type;
