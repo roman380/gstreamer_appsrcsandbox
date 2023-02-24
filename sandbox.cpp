@@ -20,6 +20,20 @@
 #  include <windows.h>
 #endif
 
+#define GETTEXT_PACKAGE "gstreamer_appsrcsandbox"
+
+// Commandline option parser https://developer-old.gnome.org/glib/unstable/glib-Commandline-option-parser.html
+
+static gchar* g_path = nullptr;
+static gint g_video_mode = 0;
+
+static GOptionEntry g_option_context_entries[]
+{
+  { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
+  { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
+  { nullptr }
+};
+
 GST_DEBUG_CATEGORY_STATIC (application_category); // https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#adding-your-own-debug-information
 #define GST_CAT_DEFAULT application_category
 
@@ -36,11 +50,11 @@ struct Application {
   Application () = default;
   ~Application ()
   {
-    if (source)
-      gst_object_unref (GST_OBJECT (std::exchange (source, nullptr)));
-    if (sink)
-      gst_object_unref (GST_OBJECT (std::exchange (sink, nullptr)));
-    if (playbin)
+    // if (source)
+    //   gst_object_unref (GST_OBJECT (std::exchange (source, nullptr)));
+    // if (sink)
+    //   gst_object_unref (GST_OBJECT (std::exchange (sink, nullptr)));
+    if (playbin && !pipeline)
       gst_object_unref (GST_OBJECT (std::exchange (playbin, nullptr)));
     if (pipeline)
       gst_object_unref (GST_OBJECT (std::exchange (pipeline, nullptr)));
@@ -105,9 +119,13 @@ struct Application {
         break;
       std::this_thread::sleep_for (std::chrono::milliseconds (200));
     }
+    GST_INFO ("Before pushing data");
+    bool end_of_stream = false;
     for (; !termination.load () && !stream.eof ();) {
       uint8_t type;
       stream.read (reinterpret_cast<char*> (&type), sizeof type);
+      if (stream.fail ())
+        break;
       g_assert_nonnull (source);
       switch (type) {
         case 1: {
@@ -162,10 +180,16 @@ struct Application {
         case 3: {
           GST_INFO ("gst_app_src_end_of_stream");
           gst_app_src_end_of_stream (source);
+          end_of_stream = true;
         } break;
         default:
           g_assert_not_reached ();
       }
+    }
+    GST_INFO ("After pushing data");
+    if (!end_of_stream) {
+      GST_INFO ("gst_app_src_end_of_stream");
+      gst_app_src_end_of_stream (source);
     }
   }
 
@@ -321,6 +345,15 @@ inline void add_debug_output_log_function ()
 
 int main (int argc, char* argv[])
 {
+  GError* error = nullptr;
+  GOptionContext* context = g_option_context_new ("- GStreamer appsrc testbed");
+  g_option_context_add_main_entries (context, g_option_context_entries, GETTEXT_PACKAGE);
+  // g_option_context_add_group (context, gtk_get_option_group (TRUE));
+  if (!g_option_context_parse (context, &argc, &argv, &error)) {
+    g_print ("Command line parse failed: %s\n", error->message);
+    exit (1);
+  }
+
   gst_init (&argc, &argv);
 
   GST_DEBUG_CATEGORY_INIT (application_category, "application", 0, "Application specific distinct debug category");
@@ -369,7 +402,7 @@ int main (int argc, char* argv[])
     // NOTE: 0 - default sink, visual rendering
     //       1 - appsink, restricted to I420
     //       2 - bin with capsfilter and appsink, restricted to I420
-    switch (0) {
+    switch (g_video_mode) {
       case 0:
         break;
       case 1: {
@@ -412,9 +445,10 @@ int main (int argc, char* argv[])
   gst_bin_add (GST_BIN (application.pipeline), application.playbin);
   gst_element_sync_state_with_parent (application.playbin);
 
-  std::string path = "../data/AppSrc-Video";
+  std::string path = g_path ? g_path : "../data/AppSrc-Video";
   std::replace (path.begin (), path.end (), '/', static_cast<char> (std:://experimental::
     filesystem::path::preferred_separator));
+  GST_DEBUG ("path %s", path.c_str ());
   std::atomic_bool push_thread_termination = false;
   std::thread push_thread ([&] { application.push (push_thread_termination, path); });
 
@@ -445,11 +479,6 @@ GST_DEBUG_DUMP_DOT_DIR=~ GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG_DUMP_DOT_DIR=~/gstreamer_appsrcsandbox/build GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
 GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
-
-roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
-roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
-
-- fakesink?
-- appsink from source
+GST_DEBUG=*:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc-Video -v 2
 
 */
