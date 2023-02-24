@@ -369,22 +369,24 @@ int main (int argc, char* argv[])
   // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
 #endif
 
-  const auto registry = gst_registry_get ();
-  {
-    auto feature = gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY);
-    GST_INFO_OBJECT (feature, "feature");
-    g_assert_nonnull (feature);
-    gst_registry_remove_feature (registry, feature);
-    gst_object_unref (std::exchange (feature, nullptr));
-    g_assert_null (gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY));
+  if (g_internal_appsink) {
+    const auto registry = gst_registry_get ();
+    {
+      auto feature = gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY);
+      GST_INFO_OBJECT (feature, "feature");
+      g_assert_nonnull (feature);
+      gst_registry_remove_feature (registry, feature);
+      gst_object_unref (std::exchange (feature, nullptr));
+      g_assert_null (gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY));
+    }
+    gst_element_register (nullptr, "appsink", GST_RANK_NONE, GST_TYPE_APP_SINK);
+    // {
+    //   const auto sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", nullptr));
+    //   g_assert_nonnull (sink);
+    //   GST_INFO_OBJECT (sink, "sink");
+    //   gst_object_unref (GST_OBJECT (sink));
+    // }
   }
-  gst_element_register (nullptr, "appsink", GST_RANK_NONE, GST_TYPE_APP_SINK);
-  // {
-  //   const auto sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", nullptr));
-  //   g_assert_nonnull (sink);
-  //   GST_INFO_OBJECT (sink, "sink");
-  //   gst_object_unref (GST_OBJECT (sink));
-  // }
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
