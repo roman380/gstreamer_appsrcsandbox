@@ -26,10 +26,12 @@
 
 static gchar* g_path = nullptr;
 static gint g_video_mode = 0;
+static gboolean g_internal_appsink = false;
 
 static GOptionEntry g_option_context_entries[] {
   { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
   { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
+  { "internal-appsink", 's', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &g_internal_appsink, "Use internal appsink", nullptr },
   { nullptr }
 };
 
