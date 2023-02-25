@@ -17,6 +17,9 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 
+// NOTE: This is not really needed for replay, just a reference to the header which creates appsrc replay files
+#include "record.h"
+
 #if defined(WIN32) && !defined(NDEBUG)
 #  include <windows.h>
 #endif
