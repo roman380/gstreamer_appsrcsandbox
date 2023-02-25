@@ -29,12 +29,16 @@ static gchar* g_path = nullptr;
 static gint g_video_mode = 0;
 static guint g_bin_count = 1;
 static guint g_video_bin_index = 0;
+static gboolean g_no_sync = false;
+static guint g_only_push_index = std::numeric_limits<guint>::max();
 
 static GOptionEntry g_option_context_entries[] {
   { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
   { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
   { "bin-count", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_bin_count, "Number of bins in the pipeline and presumably in the supplied replay input", nullptr },
   { "video-bin-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_bin_index, "Index of video bin/stream in the multi-bin configuration", nullptr },
+  { "no-sync", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &g_no_sync, "Remove sync mode from appsink instances", nullptr },
+  { "only-push-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_only_push_index, "Replay buffers only on specified stream index", nullptr },
   { nullptr }
 };
 
@@ -91,12 +95,20 @@ struct Application {
             sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
             GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
             g_object_set (G_OBJECT (sink),
-                "sync", FALSE,
+                "sync", !g_no_sync,
                 "caps", caps,
-                "max-buffers", static_cast<guint> (32),
+                "max-buffers", static_cast<guint> (12),
                 nullptr);
             set_sink_callbacks (); // connect_sink_signals ();
             g_object_set (G_OBJECT (playbin), "video-sink", GST_ELEMENT_CAST (sink), nullptr);
+          } else {
+            sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "audio_sink"));
+            g_object_set (G_OBJECT (sink),
+                "sync", !g_no_sync,
+                "max-buffers", static_cast<guint> (12),
+                nullptr);
+            set_sink_callbacks (); // connect_sink_signals ();
+            g_object_set (G_OBJECT (playbin), "audio-sink", GST_ELEMENT_CAST (sink), nullptr);
           }
         } break;
         case 2: {
@@ -108,8 +120,8 @@ struct Application {
               nullptr);
           sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
           g_object_set (G_OBJECT (sink),
-              "sync", FALSE,
-              "max-buffers", static_cast<guint> (32),
+              "sync", !g_no_sync,
+              "max-buffers", static_cast<guint> (12),
               "emit-signals", TRUE,
               nullptr);
           set_sink_callbacks (); // connect_sink_signals ();
@@ -327,19 +339,21 @@ struct Application {
           std::vector<uint8_t> data;
           data.resize (size);
           stream.read (reinterpret_cast<char*> (data.data ()), data.size ());
-          GstBuffer* buffer = gst_buffer_new_allocate (nullptr, size, nullptr);
-          GST_BUFFER_FLAGS (buffer) = static_cast<guint> (flags);
-          GST_BUFFER_DTS (buffer) = static_cast<GstClockTime> (dts);
-          GST_BUFFER_PTS (buffer) = static_cast<GstClockTime> (pts);
-          GST_BUFFER_DURATION (buffer) = static_cast<GstClockTime> (duration);
-          gst_buffer_fill (buffer, 0, data.data (), data.size ());
-          {
-            std::unique_lock source_data_lock (bin.source_data_mutex);
-            bin.source_data_condition.wait (source_data_lock, [&] { return bin.source_data_need.load () || termination.load (); });
+          if (g_only_push_index == std::numeric_limits<guint>::max () || g_only_push_index == index) {
+            GstBuffer* buffer = gst_buffer_new_allocate (nullptr, size, nullptr);
+            GST_BUFFER_FLAGS (buffer) = static_cast<guint> (flags);
+            GST_BUFFER_DTS (buffer) = static_cast<GstClockTime> (dts);
+            GST_BUFFER_PTS (buffer) = static_cast<GstClockTime> (pts);
+            GST_BUFFER_DURATION (buffer) = static_cast<GstClockTime> (duration);
+            gst_buffer_fill (buffer, 0, data.data (), data.size ());
+            {
+              std::unique_lock source_data_lock (bin.source_data_mutex);
+              bin.source_data_condition.wait (source_data_lock, [&] { return bin.source_data_need.load () || termination.load (); });
+            }
+            GST_INFO ("%u: gst_app_src_push_buffer: %s", bin.index, buffer_to_string (buffer).c_str ());
+            const auto result = gst_app_src_push_buffer (bin.source, buffer);
+            g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
           }
-          GST_INFO ("%u: gst_app_src_push_buffer: %s", bin.index, buffer_to_string (buffer).c_str ());
-          const auto result = gst_app_src_push_buffer (bin.source, buffer);
-          g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
         } break;
         case 3: {
           GST_INFO ("%u: gst_app_src_end_of_stream", bin.index);
