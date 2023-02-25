@@ -68,6 +68,7 @@
 
 #include <gst/gst.h>
 #include <gst/base/base.h>
+#include <gst/video/video-info.h>
 
 #include <string.h>
 

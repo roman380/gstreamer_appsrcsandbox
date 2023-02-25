@@ -18,11 +18,11 @@ else()
 endif()
 
 set(SOURCE sandbox.cpp)
+set(LIBRARY gstvideo-1.0 gstbase-1.0)
 if(WITH_APPSINK)
     list(APPEND SOURCE app/gstappsink.c)
 endif()
-set(LIBRARY gstvideo-1.0 gstbase-1.0)
-if(NOT WITH_APPSINK)
+if(NOT WITH_APPSINK OR NOT WIN32)
     list(APPEND LIBRARY gstapp-1.0)
 endif()
 

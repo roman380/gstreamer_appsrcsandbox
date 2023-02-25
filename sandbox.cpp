@@ -5,7 +5,7 @@
 #include <string>
 #include <sstream>
 #include <filesystem>
-//#include <experimental/filesystem>
+// #include <experimental/filesystem>
 #include <fstream>
 #include <atomic>
 #include <mutex>
@@ -27,14 +27,12 @@
 
 static gchar* g_path = nullptr;
 static gint g_video_mode = 0;
-static gboolean g_internal_appsink = false;
 static guint g_bin_count = 1;
 static guint g_video_bin_index = 0;
 
 static GOptionEntry g_option_context_entries[] {
   { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
-  { "sink-mode", 's', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
-  { "internal-appsink", 'i', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &g_internal_appsink, "Use internal appsink", nullptr },
+  { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
   { "bin-count", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_bin_count, "Number of bins in the pipeline and presumably in the supplied replay input", nullptr },
   { "video-bin-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_bin_index, "Index of video bin/stream in the multi-bin configuration", nullptr },
   { nullptr }
@@ -166,33 +164,33 @@ struct Application {
 
     GstFlowReturn handle_sink_preroll_sample (GstAppSink* sink)
     {
-      GST_DEBUG_OBJECT (sink, "handle_sink_preroll_sample");
+      GST_DEBUG_OBJECT (sink, "%u: handle_sink_preroll_sample", index);
       g_assert_nonnull (sink);
       for (;;) {
         const auto sample = gst_app_sink_try_pull_preroll (sink, 0);
         if (!sample)
           break;
-        GST_INFO_OBJECT (sample, "handle_sink_preroll_sample: %s", sample_text (sample).c_str ());
+        GST_INFO_OBJECT (sample, "%u: handle_sink_preroll_sample: %s", index, sample_text (sample).c_str ());
         gst_sample_unref (sample);
       }
       return GstFlowReturn::GST_FLOW_OK;
     }
     GstFlowReturn handle_sink_sample (GstAppSink* sink)
     {
-      GST_DEBUG_OBJECT (sink, "handle_sink_sample");
+      GST_DEBUG_OBJECT (sink, "%u: handle_sink_sample", index);
       g_assert_nonnull (sink);
       for (;;) {
         const auto sample = gst_app_sink_try_pull_sample (sink, 0);
         if (!sample)
           break;
-        GST_INFO_OBJECT (sample, "handle_sink_sample: %s", sample_text (sample).c_str ());
+        GST_INFO_OBJECT (sample, "%u: handle_sink_sample: %s", index, sample_text (sample).c_str ());
         gst_sample_unref (sample);
       }
       return GstFlowReturn::GST_FLOW_OK;
     }
     void handle_sink_eos (GstAppSink* sink)
     {
-      GST_INFO_OBJECT (sink, "handle_sink_eos");
+      GST_INFO_OBJECT (sink, "%u: handle_sink_eos", index);
     }
 
     Application* application;
@@ -308,7 +306,7 @@ struct Application {
           {
             gst_caps_set_simple (caps, "stream-format", G_TYPE_STRING, "byte-stream", nullptr);
             gchar* caps_string = gst_caps_to_string (caps);
-            GST_INFO ("gst_app_src_set_caps: %s", caps_string);
+            GST_INFO ("%u: gst_app_src_set_caps: %s", index, caps_string);
             g_free (caps_string);
           }
 #endif
@@ -541,11 +539,8 @@ GST_DEBUG_DUMP_DOT_DIR=~ GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG_DUMP_DOT_DIR=~/gstreamer_appsrcsandbox/build GST_DEBUG=*:2,application:4 ./sandbox
 GST_DEBUG=*:2,application:4 ./sandbox 2>sandbox-1.log
 GST_DEBUG=*:6 ./sandbox 2>sandbox-2.log
-GST_DEBUG=*:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc-Video -s 2
-GST_DEBUG=*:2,application:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc -s 1 --bin-count 2 --video-bin-index 0
-
-roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ mv ~/cross/VideoPlayerTester/AppSrc-Video ../data
-roman@raspberrypi:~/gstreamer_appsrcsandbox/build $ ls -l ../data
+GST_DEBUG=*:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc-Video -v 2
+GST_DEBUG=*:2,application:4 build/sandbox -p ~/rpi/build_reference/VideoPlayerTester/AppSrc -v 1 --bin-count 2 --video-bin-index 1
 
 - fakesink?
 
