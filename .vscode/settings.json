@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "gstappsink.h": "c",
+        "video-info.h": "c"
+    }
+}
