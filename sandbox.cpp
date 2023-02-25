@@ -462,9 +462,10 @@ int main (int argc, char* argv[])
   gst_bin_add (GST_BIN (application.pipeline), application.playbin);
   gst_element_sync_state_with_parent (application.playbin);
 
-  std::string path = g_path ? g_path : "../data/AppSrc-Video";
+  std::string path = g_path ? g_path : "../data/appsrc";
   std::replace (path.begin (), path.end (), '/', static_cast<char> (std:://experimental::
     filesystem::path::preferred_separator));
+  GST_DEBUG ("path %s", path.c_str ());
   GST_DEBUG ("path %s", path.c_str ());
   std::atomic_bool push_thread_termination = false;
   std::thread push_thread ([&] { application.push (push_thread_termination, path); });
