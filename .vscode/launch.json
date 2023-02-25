@@ -6,18 +6,14 @@
     "configurations": [
         {
             "name": "sandbox",
-            "type": "cppdbg",
+            "type": "cppdbg", // https://gist.github.com/evelynluw/588559d9e3619a23507ef9cbc7cd951b
             "request": "launch", // launch, attach
             "program": "${workspaceFolder}/build/sandbox",
-            "args": [],
+            "args": ["-p", "/home/roman/rpi/build_reference/VideoPlayerTester/AppSrc", "-v", "1"],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}/build",
-            "env": [
-                {
-                    "GST_DEBUG": "*:2,application:4,appsink:5"
-                }
-            ],
-            "externalConsole": true,
+            "environment": [],
+            "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
             "setupCommands": [
@@ -31,7 +27,8 @@
                     "text": "-gdb-set disassembly-flavor intel",
                     "ignoreFailures": true
                 }
-            ]
+            ],
+            "preLaunchTask": ""
         }
     ]
 }
