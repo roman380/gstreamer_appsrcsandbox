@@ -27,8 +27,7 @@
 static gchar* g_path = nullptr;
 static gint g_video_mode = 0;
 
-static GOptionEntry g_option_context_entries[]
-{
+static GOptionEntry g_option_context_entries[] {
   { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
   { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
   { nullptr }
@@ -369,24 +368,24 @@ int main (int argc, char* argv[])
   // gst_debug_set_threshold_for_name ("...", GST_LEVEL_DEBUG);
 #endif
 
-  if (g_internal_appsink) {
-    const auto registry = gst_registry_get ();
-    {
-      auto feature = gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY);
-      GST_INFO_OBJECT (feature, "feature");
-      g_assert_nonnull (feature);
-      gst_registry_remove_feature (registry, feature);
-      gst_object_unref (std::exchange (feature, nullptr));
-      g_assert_null (gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY));
-    }
-    gst_element_register (nullptr, "appsink", GST_RANK_NONE, GST_TYPE_APP_SINK);
-    // {
-    //   const auto sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", nullptr));
-    //   g_assert_nonnull (sink);
-    //   GST_INFO_OBJECT (sink, "sink");
-    //   gst_object_unref (GST_OBJECT (sink));
-    // }
+#if defined(WITH_APPSINK)
+  const auto registry = gst_registry_get ();
+  {
+    auto feature = gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY);
+    GST_INFO_OBJECT (feature, "feature");
+    g_assert_nonnull (feature);
+    gst_registry_remove_feature (registry, feature);
+    gst_object_unref (std::exchange (feature, nullptr));
+    g_assert_null (gst_registry_find_feature (registry, "appsink", GST_TYPE_ELEMENT_FACTORY));
   }
+  gst_element_register (nullptr, "appsink", GST_RANK_NONE, GST_TYPE_APP_SINK);
+// {
+//   const auto sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", nullptr));
+//   g_assert_nonnull (sink);
+//   GST_INFO_OBJECT (sink, "sink");
+//   gst_object_unref (GST_OBJECT (sink));
+// }
+#endif
 
   Application application;
   application.pipeline = GST_PIPELINE_CAST (gst_pipeline_new ("pipeline"));
@@ -422,13 +421,8 @@ int main (int argc, char* argv[])
       gst_app_sink_set_callbacks (application.sink, &callbacks, &application, nullptr);
     };
 
-    // NOTE: 0 - default sink, visual rendering
-    //       1 - appsink, restricted to I420
-    //       2 - bin with capsfilter and appsink, restricted to I420
     switch (g_video_mode) {
-      case 0:
-        break;
-      case 1: {
+      case 0: {
         application.sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
         GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
         g_object_set (G_OBJECT (application.sink),
@@ -436,7 +430,7 @@ int main (int argc, char* argv[])
             "caps", caps,
             "max-buffers", static_cast<guint> (32),
             nullptr);
-        set_sink_callbacks(); //connect_sink_signals ();
+        set_sink_callbacks (); // connect_sink_signals ();
         g_object_set (G_OBJECT (application.playbin), "video-sink", GST_ELEMENT_CAST (application.sink), nullptr);
       } break;
       case 2: {
@@ -451,7 +445,7 @@ int main (int argc, char* argv[])
             "max-buffers", static_cast<guint> (32),
             "emit-signals", TRUE,
             nullptr);
-        set_sink_callbacks(); //connect_sink_signals ();
+        set_sink_callbacks (); // connect_sink_signals ();
         auto sink_bin = GST_BIN_CAST (gst_bin_new ("sink_bin"));
         gst_bin_add_many (sink_bin, capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
         gst_element_link_many (capsfilter, GST_ELEMENT_CAST (application.sink), nullptr);
