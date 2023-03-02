@@ -42,18 +42,20 @@ using namespace std::filesystem::path;
 
 static gchar* g_path = nullptr;
 static gint g_video_mode = 0;
-static guint g_bin_count = 1;
-static guint g_video_bin_index = 0;
+static guint g_stream_count = 1;
+static guint g_video_index = 0;
 static gboolean g_no_sync = false;
-static guint g_only_push_index = std::numeric_limits<guint>::max();
+static guint g_only_push_index = std::numeric_limits<guint>::max ();
+static gboolean g_playsink_mode = false;
 
 static GOptionEntry g_option_context_entries[] {
   { "path", 'p', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_STRING, &g_path, "Path to input file to play back", nullptr },
   { "video-mode", 'v', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_mode, "Playbin video-sink mode (0 - default sink, 1 - I420 appsink, 2 - I420 capsfilter & appsink)", nullptr },
-  { "bin-count", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_bin_count, "Number of bins in the pipeline and presumably in the supplied replay input", nullptr },
-  { "video-bin-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_bin_index, "Index of video bin/stream in the multi-bin configuration", nullptr },
+  { "stream-count", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_stream_count, "Number of bins in the pipeline and presumably in the supplied replay input", nullptr },
+  { "video-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_video_index, "Index of video stream in the input file (and respectively in multi-stream or joint stream configuration)", nullptr },
   { "no-sync", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &g_no_sync, "Remove sync mode from appsink instances", nullptr },
   { "only-push-index", 0, G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_INT, &g_only_push_index, "Replay buffers only on specified stream index", nullptr },
+  { "playsink-mode", 's', G_OPTION_FLAG_IN_MAIN, G_OPTION_ARG_NONE, &g_playsink_mode, "Use single playsink instead of playbins for video/audio input", nullptr },
   { nullptr }
 };
 
@@ -65,13 +67,25 @@ void set_pipeline_state (GstPipeline* pipeline, GstState state)
   g_assert_nonnull (pipeline);
   const auto result = gst_element_set_state (GST_ELEMENT_CAST (pipeline), state);
   g_assert_true (result >= GST_STATE_CHANGE_SUCCESS);
-  if (result == GST_STATE_CHANGE_ASYNC)
-    g_assert_true (gst_element_get_state (GST_ELEMENT_CAST (pipeline), nullptr, nullptr, GST_CLOCK_TIME_NONE) != GST_STATE_CHANGE_FAILURE);
+  if (result == GST_STATE_CHANGE_ASYNC) {
+    const auto async_result = gst_element_get_state (GST_ELEMENT_CAST (pipeline), nullptr, nullptr, GST_CLOCK_TIME_NONE);
+    g_assert_true (async_result != GST_STATE_CHANGE_FAILURE);
+  }
 }
 
 struct Application {
-  struct Bin {
-    void create_playbin ()
+  struct SourceData {
+    GstAppSrc* source = nullptr;
+    std::atomic_uint caps_version = 0;
+    std::atomic_bool hold = false;
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::atomic_bool need = false;
+    bool end_of_stream = false;
+  };
+
+  struct SingleStream {
+    void create ()
     {
       playbin = gst_element_factory_make ("playbin", nullptr); // https://gstreamer.freedesktop.org/documentation/playback/playbin.html#properties
       g_assert_nonnull (playbin);
@@ -79,23 +93,21 @@ struct Application {
           "uri", "appsrc://",
           "flags", 3, // static_cast<GstPlayFlags>(GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO), // https://gstreamer.freedesktop.org/documentation/playback/playsink.html#GstPlayFlags
           nullptr);
-      g_signal_connect (playbin, "source-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Bin* bin) { bin->handle_source_setup (element); }), this);
-      g_signal_connect (playbin, "element-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, Bin* bin) { bin->handle_element_setup (element); }), this);
-    }
-    void create_sink ()
-    {
+      g_signal_connect (playbin, "source-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, SingleStream* stream) { stream->handle_source_setup (element); }), this);
+      g_signal_connect (playbin, "element-setup", G_CALLBACK (+[] (GstElement* pipeline, GstElement* element, SingleStream* stream) { stream->handle_element_setup (element); }), this);
+
       const auto connect_sink_signals = [&] {
         g_object_set (G_OBJECT (sink), "emit-signals", TRUE, nullptr);
-        g_signal_connect (sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Bin* bin) -> GstFlowReturn { return bin->handle_sink_preroll_sample (sink); }), this);
-        g_signal_connect (sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Bin* bin) -> GstFlowReturn { return bin->handle_sink_sample (sink); }), this);
-        g_signal_connect (sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Bin* bin) { bin->handle_sink_eos (sink); }), this);
+        g_signal_connect (sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, SingleStream* stream) -> GstFlowReturn { return stream->handle_sink_preroll_sample (sink); }), this);
+        g_signal_connect (sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, SingleStream* stream) -> GstFlowReturn { return stream->handle_sink_sample (sink); }), this);
+        g_signal_connect (sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, SingleStream* stream) { stream->handle_sink_eos (sink); }), this);
       };
       const auto set_sink_callbacks = [&] {
         g_object_set (G_OBJECT (sink), "emit-signals", FALSE, nullptr);
         GstAppSinkCallbacks callbacks;
-        callbacks.eos = ([] (GstAppSink* sink, gpointer bin) { reinterpret_cast<Bin*> (bin)->handle_sink_eos (sink); });
-        callbacks.new_preroll = ([] (GstAppSink* sink, gpointer bin) -> GstFlowReturn { return reinterpret_cast<Bin*> (bin)->handle_sink_preroll_sample (sink); });
-        callbacks.new_sample = ([] (GstAppSink* sink, gpointer bin) -> GstFlowReturn { return reinterpret_cast<Bin*> (bin)->handle_sink_sample (sink); });
+        callbacks.eos = ([] (GstAppSink* sink, gpointer stream) { reinterpret_cast<SingleStream*> (stream)->handle_sink_eos (sink); });
+        callbacks.new_preroll = ([] (GstAppSink* sink, gpointer stream) -> GstFlowReturn { return reinterpret_cast<SingleStream*> (stream)->handle_sink_preroll_sample (sink); });
+        callbacks.new_sample = ([] (GstAppSink* sink, gpointer stream) -> GstFlowReturn { return reinterpret_cast<SingleStream*> (stream)->handle_sink_sample (sink); });
         gst_app_sink_set_callbacks (sink, &callbacks, this, nullptr);
       };
 
@@ -106,7 +118,7 @@ struct Application {
         case 0:
           break;
         case 1: {
-          if (index == g_video_bin_index) {
+          if (index == g_video_index) {
             sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", "video_sink"));
             GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
             g_object_set (G_OBJECT (sink),
@@ -127,7 +139,7 @@ struct Application {
           }
         } break;
         case 2: {
-          g_assert_true (g_bin_count == 1 && g_video_bin_index == 0);
+          g_assert_true (g_stream_count == 1 && g_video_index == 0);
           auto capsfilter = gst_element_factory_make ("capsfilter", "video_caps"); // https://gstreamer.freedesktop.org/documentation/coreelements/capsfilter.html#capsfilter-page
           GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
           g_object_set (G_OBJECT (capsfilter),
@@ -151,21 +163,24 @@ struct Application {
           g_object_set (G_OBJECT (playbin), "video-sink", GST_ELEMENT_CAST (sink_bin), nullptr);
         } break;
       }
+
+      gst_bin_add (GST_BIN (application->pipeline), playbin);
+      gst_element_sync_state_with_parent (playbin);
     }
 
     void handle_source_setup (GstElement* element)
     {
       GST_INFO_OBJECT (element, "%u: handle_source_setup, %s", index, GST_ELEMENT_NAME (element));
-      source = GST_APP_SRC (element);
-      gst_object_ref (GST_OBJECT_CAST (source));
-      g_object_set (source, // https://gstreamer.freedesktop.org/documentation/app/appsrc.html?gi-language=c
+      source_data.source = GST_APP_SRC (element);
+      gst_object_ref (GST_OBJECT_CAST (source_data.source));
+      g_object_set (source_data.source, // https://gstreamer.freedesktop.org/documentation/app/appsrc.html?gi-language=c
           "max-bytes", static_cast<guint64> (2 << 20),
           "min-percent", static_cast<guint> (50),
           nullptr);
-      g_object_set (source, "format", GST_FORMAT_TIME, nullptr);
-      g_signal_connect (source, "enough-data", G_CALLBACK (+[] (GstElement* Element, Bin* bin) { bin->handle_enough_data (); }), this);
-      g_signal_connect (source, "need-data", G_CALLBACK (+[] (GstElement* Element, guint DataSize, Bin* bin) { bin->handle_need_data (); }), this);
-      source_data_need.store (true);
+      g_object_set (source_data.source, "format", GST_FORMAT_TIME, nullptr);
+      g_signal_connect (source_data.source, "enough-data", G_CALLBACK (+[] (GstElement* element, SingleStream* stream) { stream->handle_enough_data (); }), this);
+      g_signal_connect (source_data.source, "need-data", G_CALLBACK (+[] (GstElement* element, guint data_size, SingleStream* stream) { stream->handle_need_data (); }), this);
+      source_data.need.store (true);
     }
     void handle_element_setup (GstElement* element)
     {
@@ -176,17 +191,17 @@ struct Application {
     {
       GST_WARNING ("%u: handle_enough_data", index);
       // GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox-handle_enough_data");
-      std::unique_lock source_data_lock (source_data_mutex);
-      source_data_need.store (false);
-      source_data_condition.notify_all ();
+      std::unique_lock source_data_lock (source_data.mutex);
+      source_data.need.store (false);
+      source_data.condition.notify_all ();
     }
     void handle_need_data ()
     {
       GST_WARNING ("%u: handle_need_data", index);
       // GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox-handle_need_data");
-      std::unique_lock source_data_lock (source_data_mutex);
-      source_data_need.store (true);
-      source_data_condition.notify_all ();
+      std::unique_lock source_data_lock (source_data.mutex);
+      source_data.need.store (true);
+      source_data.condition.notify_all ();
     }
 
     GstFlowReturn handle_sink_preroll_sample (GstAppSink* sink)
@@ -223,12 +238,212 @@ struct Application {
     Application* application;
     guint index;
     GstElement* playbin = nullptr;
-    GstAppSrc* source = nullptr;
-    std::mutex source_data_mutex;
-    std::condition_variable source_data_condition;
-    std::atomic_bool source_data_need;
-    bool end_of_stream = false;
+    SourceData source_data;
     GstAppSink* sink = nullptr;
+  };
+
+  struct JointStream {
+    struct Stream {
+      void create_source ()
+      {
+        std::ostringstream name;
+        name << this->name << "_source";
+        source_data.source = GST_APP_SRC (gst_element_factory_make ("appsrc", name.str ().c_str ()));
+        g_object_set (source_data.source, // https://gstreamer.freedesktop.org/documentation/app/appsrc.html?gi-language=c
+            "max-bytes", static_cast<guint64> (2 << 20),
+            "min-percent", static_cast<guint> (50),
+            nullptr);
+        g_object_set (source_data.source, "format", GST_FORMAT_TIME, nullptr);
+        g_signal_connect (source_data.source, "enough-data", G_CALLBACK (+[] (GstElement* element, Stream* stream) { stream->handle_enough_data (); }), this);
+        g_signal_connect (source_data.source, "need-data", G_CALLBACK (+[] (GstElement* element, guint data_size, Stream* stream) { stream->handle_need_data (); }), this);
+      }
+      void create_sink ()
+      {
+        std::ostringstream name;
+        name << this->name << "_sink";
+        sink = GST_APP_SINK_CAST (gst_element_factory_make ("appsink", name.str ().c_str ()));
+        g_object_set (G_OBJECT (sink),
+            "sync", !g_no_sync,
+            "max-buffers", static_cast<guint> (12),
+            nullptr);
+        const auto connect_sink_signals = [&] {
+          g_object_set (G_OBJECT (sink), "emit-signals", TRUE, nullptr);
+          g_signal_connect (sink, "new-preroll", G_CALLBACK (+[] (GstAppSink* sink, Stream* stream) -> GstFlowReturn { return stream->handle_sink_preroll_sample (sink); }), this);
+          g_signal_connect (sink, "new-sample", G_CALLBACK (+[] (GstAppSink* sink, Stream* stream) -> GstFlowReturn { return stream->handle_sink_sample (sink); }), this);
+          g_signal_connect (sink, "eos", G_CALLBACK (+[] (GstAppSink* sink, Stream* stream) { stream->handle_sink_eos (sink); }), this);
+        };
+        const auto set_sink_callbacks = [&] {
+          g_object_set (G_OBJECT (sink), "emit-signals", FALSE, nullptr);
+          GstAppSinkCallbacks callbacks;
+          callbacks.eos = ([] (GstAppSink* sink, gpointer stream) { reinterpret_cast<Stream*> (stream)->handle_sink_eos (sink); });
+          callbacks.new_preroll = ([] (GstAppSink* sink, gpointer stream) -> GstFlowReturn { return reinterpret_cast<Stream*> (stream)->handle_sink_preroll_sample (sink); });
+          callbacks.new_sample = ([] (GstAppSink* sink, gpointer stream) -> GstFlowReturn { return reinterpret_cast<Stream*> (stream)->handle_sink_sample (sink); });
+          gst_app_sink_set_callbacks (sink, &callbacks, this, nullptr);
+        };
+        set_sink_callbacks (); // connect_sink_signals ();
+      }
+
+      void create_decodebin (const char* playsink_pad_name)
+      {
+        g_assert_nonnull (playsink_pad_name);
+        GST_DEBUG ("name %s, playsink_pad_name %s", name.c_str (), playsink_pad_name);
+        g_assert_null (decodebin);
+        g_assert_false (decodebin_linked);
+        GstPad* source_pad = gst_element_get_static_pad (GST_ELEMENT_CAST (source_data.source), "src");
+        decodebin = gst_element_factory_make ("decodebin3", nullptr);
+        g_assert_nonnull (decodebin);
+        g_object_set (GST_OBJECT (decodebin),
+            "flags", 3, // static_cast<GstPlayFlags>(GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO), // https://gstreamer.freedesktop.org/documentation/playback/playsink.html#GstPlayFlags
+            nullptr);
+        g_signal_connect (decodebin, "pad-added", G_CALLBACK (+[] (GstElement* element, GstPad* pad, gpointer parameter) { reinterpret_cast<Stream*> (parameter)->handle_decodebin_pad_added (pad); }), this);
+        this->playsink_pad_name = playsink_pad_name;
+        gst_bin_add (GST_BIN (foo->application->pipeline), decodebin);
+        gst_element_sync_state_with_parent (decodebin);
+        auto sink_pad = gst_element_get_static_pad (decodebin, "sink");
+        const auto pad_link_result = gst_pad_link (source_pad, sink_pad);
+        g_assert_true (pad_link_result == GST_PAD_LINK_OK);
+        gst_object_unref (GST_OBJECT (sink_pad));
+        gst_object_unref (GST_OBJECT (std::exchange (source_pad, nullptr)));
+      }
+
+      void handle_decodebin_pad_added (GstPad* pad)
+      {
+        g_assert_nonnull (pad);
+        GST_DEBUG ("name %s, playsink_pad_name %s", name.c_str (), playsink_pad_name.c_str ());
+        g_assert_nonnull (decodebin);
+        g_assert_false (gst_pad_is_linked (pad));
+        GstPadTemplate* pad_template = gst_element_class_get_pad_template (GST_ELEMENT_GET_CLASS (foo->playsink), playsink_pad_name.c_str ());
+        GstPad* sink_pad = gst_element_request_pad (foo->playsink, pad_template, nullptr, nullptr);
+        g_assert_false (gst_pad_is_linked (sink_pad));
+        const auto pad_link_result = gst_pad_link (pad, sink_pad);
+        g_assert_true (pad_link_result == GST_PAD_LINK_OK);
+        gst_object_unref (sink_pad);
+#if !defined(NDEBUG)
+        char name[64];
+        sprintf (name, "gstreamer_appsrcsandbox-handle_decodebin_pad_added-%s", this->name.c_str ());
+        GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (foo->application->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, name);
+#endif
+        decodebin_linked.store (true);
+      }
+
+      void handle_enough_data ()
+      {
+        GST_WARNING ("%s: handle_enough_data", name.c_str ());
+#if !defined(NDEBUG)
+        static std::atomic_uint g_counter;
+        char name[64];
+        sprintf (name, "gstreamer_appsrcsandbox-handle_enough_data-%03u", g_counter++);
+        GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (foo->application->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, name);
+#endif
+        std::unique_lock source_data_lock (source_data.mutex);
+        source_data.need.store (false);
+        source_data.condition.notify_all ();
+      }
+      void handle_need_data ()
+      {
+        GST_WARNING ("%s: handle_need_data", name.c_str ());
+#if !defined(NDEBUG)
+        static std::atomic_uint g_counter;
+        char name[64];
+        sprintf (name, "gstreamer_appsrcsandbox-handle_need_data-%03u", g_counter++);
+        GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (foo->application->pipeline), GST_DEBUG_GRAPH_SHOW_ALL, name);
+#endif
+        std::unique_lock source_data_lock (source_data.mutex);
+        source_data.need.store (true);
+        source_data.condition.notify_all ();
+      }
+
+      GstFlowReturn handle_sink_preroll_sample (GstAppSink* sink)
+      {
+        GST_DEBUG_OBJECT (sink, "%s: handle_sink_preroll_sample", name.c_str ());
+        g_assert_nonnull (sink);
+        for (;;) {
+          const auto sample = gst_app_sink_try_pull_preroll (sink, 0);
+          if (!sample)
+            break;
+          GST_INFO_OBJECT (sample, "%s: handle_sink_preroll_sample: %s", name.c_str (), sample_text (sample).c_str ());
+          gst_sample_unref (sample);
+        }
+        return GstFlowReturn::GST_FLOW_OK;
+      }
+      GstFlowReturn handle_sink_sample (GstAppSink* sink)
+      {
+        GST_DEBUG_OBJECT (sink, "%s: handle_sink_sample", name.c_str ());
+        g_assert_nonnull (sink);
+        for (;;) {
+          const auto sample = gst_app_sink_try_pull_sample (sink, 0);
+          if (!sample)
+            break;
+          GST_INFO_OBJECT (sample, "%s: handle_sink_sample: %s", name.c_str (), sample_text (sample).c_str ());
+          gst_sample_unref (sample);
+        }
+        return GstFlowReturn::GST_FLOW_OK;
+      }
+      void handle_sink_eos (GstAppSink* sink)
+      {
+        GST_INFO_OBJECT (sink, "%s: handle_sink_eos", name.c_str ());
+      }
+
+      JointStream* foo;
+      std::string name;
+      SourceData source_data;
+      GstElement* decodebin = nullptr;
+      std::atomic_bool decodebin_linked = false;
+      std::string playsink_pad_name;
+      GstAppSink* sink = nullptr;
+    };
+
+    void create ()
+    {
+      g_assert_null (playsink);
+      playsink = gst_element_factory_make ("playsink", nullptr);
+      g_assert_nonnull (playsink);
+      gst_bin_add (GST_BIN (application->pipeline), playsink);
+
+      g_assert (g_video_index >= 0 && g_video_index < 2);
+
+      video.foo = this;
+      video.name = "video";
+      audio.foo = this;
+      audio.name = "audio";
+
+      // NOTE: 0 - default sink, visual rendering
+      //       1 - appsinks, video restricted to I420
+      switch (g_video_mode) {
+        case 0:
+          break;
+        case 1: {
+          video.create_sink ();
+          GstCaps* caps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "I420", nullptr);
+          g_object_set (G_OBJECT (video.sink), "caps", caps, nullptr);
+          g_object_set (G_OBJECT (playsink), "video-sink", GST_ELEMENT_CAST (video.sink), nullptr);
+          audio.create_sink ();
+          g_object_set (G_OBJECT (playsink), "audio-sink", GST_ELEMENT_CAST (audio.sink), nullptr);
+        } break;
+      }
+
+      video.create_source ();
+      audio.create_source ();
+
+      g_assert_true (gst_bin_add (GST_BIN (application->pipeline), GST_ELEMENT_CAST (video.source_data.source)));
+      g_assert_true (gst_bin_add (GST_BIN (application->pipeline), GST_ELEMENT_CAST (audio.source_data.source)));
+
+      g_assert_true (gst_element_sync_state_with_parent (playsink));
+      g_assert_true (gst_element_sync_state_with_parent (GST_ELEMENT_CAST (video.source_data.source)));
+      g_assert_true (gst_element_sync_state_with_parent (GST_ELEMENT_CAST (audio.source_data.source)));
+    }
+    void link_source_pads ()
+    {
+      g_assert_true (playsink && video.source_data.source && audio.source_data.source);
+      // SUGG: Use single decodebin for both video and audio?
+      video.create_decodebin ("video_raw_sink");
+      audio.create_decodebin ("audio_raw_sink");
+    }
+
+    Application* application;
+    GstElement* playsink = nullptr;
+    Stream video;
+    Stream audio;
   };
 
   Application () = default;
@@ -292,10 +507,12 @@ struct Application {
     std::ifstream stream;
     stream.open (path, std::ios_base::in | std::ios_base::binary);
     g_assert_true (stream);
-    for (; !termination.load ();) {
-      if (std::all_of (bin_list.cbegin (), bin_list.cend (), [&] (auto&& bin) { return bin.source != nullptr; }))
-        break;
-      std::this_thread::sleep_for (std::chrono::milliseconds (200));
+    if (!stream_list.empty ()) {
+      for (; !termination.load ();) {
+        if (std::all_of (stream_list.cbegin (), stream_list.cend (), [&] (auto&& bin) { return bin.source_data.source != nullptr; }))
+          break;
+        std::this_thread::sleep_for (std::chrono::milliseconds (200));
+      }
     }
     GST_INFO ("Before pushing data");
     std::once_flag stream_warnning;
@@ -308,16 +525,31 @@ struct Application {
       stream.read (reinterpret_cast<char*> (&index), sizeof index);
       if (stream.fail ())
         break;
-      if (index >= bin_list.size ()) {
-        std::call_once (stream_warnning, [&] {
-          GST_ERROR ("Trying to play packet for stream %u in %zu-bin configuration, use --bin-count", index, bin_list.size ());
-        });
-        continue;
+
+      SourceData* source_data;
+      std::string name;
+      if (!stream_list.empty ()) {
+        if (index >= stream_list.size ()) {
+          std::call_once (stream_warnning, [&] {
+            GST_ERROR ("Trying to play packet for stream %u in %zu-bin configuration, use --bin-count", index, stream_list.size ());
+          });
+          continue;
+        }
+        auto iterator = stream_list.begin ();
+        std::advance (iterator, index);
+        auto& stream = *iterator;
+        source_data = &stream.source_data;
+        std::ostringstream name_stream;
+        name_stream << stream.index;
+        name = name_stream.str ();
+      } else {
+        auto* stream = (index == g_video_index) ? &joint_stream.video : &joint_stream.audio;
+        source_data = &stream->source_data;
+        name = stream->name;
       }
-      auto iterator = bin_list.begin ();
-      std::advance (iterator, index);
-      auto& bin = *iterator;
-      g_assert_nonnull (bin.source);
+      g_assert_nonnull (source_data);
+      g_assert_nonnull (source_data->source);
+
       switch (type) {
         case 1: {
           uint16_t size;
@@ -328,7 +560,7 @@ struct Application {
             stream.read (reinterpret_cast<char*> (caps_string.data ()), caps_string.size ());
           }
           GstCaps* caps = gst_caps_from_string (caps_string.c_str ());
-          GST_INFO ("%u: gst_app_src_set_caps: %s", bin.index, caps_string.c_str ());
+          GST_INFO ("%s: gst_app_src_set_caps: %s", name.c_str (), caps_string.c_str ());
 #if 0
           {
             gst_caps_set_simple (caps, "stream-format", G_TYPE_STRING, "byte-stream", nullptr);
@@ -337,8 +569,9 @@ struct Application {
             g_free (caps_string);
           }
 #endif
-          gst_app_src_set_caps (bin.source, caps);
+          gst_app_src_set_caps (source_data->source, caps);
           gst_caps_unref (caps);
+          source_data->caps_version++;
         } break;
         case 2: {
           uint64_t flags;
@@ -362,18 +595,20 @@ struct Application {
             GST_BUFFER_DURATION (buffer) = static_cast<GstClockTime> (duration);
             gst_buffer_fill (buffer, 0, data.data (), data.size ());
             {
-              std::unique_lock source_data_lock (bin.source_data_mutex);
-              bin.source_data_condition.wait (source_data_lock, [&] { return bin.source_data_need.load () || termination.load (); });
+              std::unique_lock source_data_lock (source_data->mutex);
+              source_data->condition.wait (source_data_lock, [&] { return (!source_data->hold.load () && source_data->need.load ()) || termination.load (); });
             }
-            GST_INFO ("%u: gst_app_src_push_buffer: %s", bin.index, buffer_to_string (buffer).c_str ());
-            const auto result = gst_app_src_push_buffer (bin.source, buffer);
+            if (termination.load ())
+              return;
+            GST_INFO ("%s: gst_app_src_push_buffer: %s", name.c_str (), buffer_to_string (buffer).c_str ());
+            const auto result = gst_app_src_push_buffer (source_data->source, buffer);
             g_assert_true (result == GstFlowReturn::GST_FLOW_OK);
           }
         } break;
         case 3: {
-          GST_INFO ("%u: gst_app_src_end_of_stream", bin.index);
-          gst_app_src_end_of_stream (bin.source);
-          bin.end_of_stream = true;
+          GST_INFO ("%s: gst_app_src_end_of_stream", name.c_str ());
+          gst_app_src_end_of_stream (source_data->source);
+          source_data->end_of_stream = true;
         } break;
         default:
           g_assert_not_reached ();
@@ -381,11 +616,19 @@ struct Application {
     }
     GST_INFO ("After pushing data");
     if (g_video_mode != 0) {
-      for (auto&& bin : bin_list) {
-        if (!bin.end_of_stream) {
-          GST_INFO ("%u: gst_app_src_end_of_stream", bin.index);
-          gst_app_src_end_of_stream (bin.source);
+      if (!stream_list.empty ()) {
+        for (auto&& stream : stream_list) {
+          if (!stream.source_data.end_of_stream) {
+            GST_INFO ("%u: gst_app_src_end_of_stream", stream.index);
+            gst_app_src_end_of_stream (stream.source_data.source);
+          }
         }
+      } else {
+        for (auto* stream : { &joint_stream.video, &joint_stream.audio })
+          if (!stream->source_data.end_of_stream) {
+            GST_INFO ("%s: gst_app_src_end_of_stream", stream->name.c_str ());
+            gst_app_src_end_of_stream (stream->source_data.source);
+          }
       }
     }
   }
@@ -446,7 +689,8 @@ struct Application {
   }
 
   GstPipeline* pipeline = nullptr;
-  std::list<Bin> bin_list;
+  std::list<SingleStream> stream_list;
+  JointStream joint_stream;
 };
 
 inline void add_debug_output_log_function ()
@@ -522,15 +766,19 @@ int main (int argc, char* argv[])
   g_signal_connect (G_OBJECT (bus), "message::eos", G_CALLBACK (+[] (GstBus* bus, GstMessage* message, Application* application) -> void { application->handle_bus_eos_message (bus, message); }), &application);
   g_signal_connect (G_OBJECT (bus), "message::state-changed", G_CALLBACK (+[] (GstBus* bus, GstMessage* message, Application* application) -> void { application->handle_bus_state_changed_message (bus, message); }), &application);
 
-  g_assert_true (g_bin_count > 0);
-  for (guint index = 0; index < g_bin_count; index++) {
-    auto& bin = application.bin_list.emplace_back ();
-    bin.application = &application;
-    bin.index = index;
-    bin.create_playbin ();
-    bin.create_sink ();
-    gst_bin_add (GST_BIN (application.pipeline), bin.playbin);
-    gst_element_sync_state_with_parent (bin.playbin);
+  if (g_playsink_mode) {
+    application.joint_stream.application = &application;
+    application.joint_stream.create ();
+    application.joint_stream.video.source_data.hold.store (true);
+    application.joint_stream.audio.source_data.hold.store (true);
+  } else {
+    g_assert_true (g_stream_count > 0);
+    for (guint index = 0; index < g_stream_count; index++) {
+      auto& stream = application.stream_list.emplace_back ();
+      stream.application = &application;
+      stream.index = index;
+      stream.create ();
+    }
   }
 
   std::string path = g_path ? g_path : "../data/appsrc";
@@ -539,18 +787,58 @@ int main (int argc, char* argv[])
   std::atomic_bool push_thread_termination = false;
   std::thread push_thread ([&] { application.push (push_thread_termination, path); });
 
+  if (g_playsink_mode) {
+    // TODO: If source file does not have caps as first items this might lock dead
+    // TODO: Also check for EOS for accuracy
+    GST_INFO ("Waiting for appsrc caps...");
+    for (unsigned int iteration = 0;; iteration++) {
+      if (application.joint_stream.video.source_data.caps_version.load () >= 1 || application.joint_stream.audio.source_data.caps_version.load () >= 1)
+        break;
+      std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    }
+    application.joint_stream.link_source_pads ();
+    GST_INFO ("Waiting for playsink source links...");
+    application.joint_stream.video.source_data.hold.store (false);
+    application.joint_stream.video.source_data.need.store (true);
+    application.joint_stream.video.source_data.condition.notify_all ();
+    application.joint_stream.audio.source_data.hold.store (false);
+    application.joint_stream.audio.source_data.need.store (true);
+    application.joint_stream.audio.source_data.condition.notify_all ();
+    set_pipeline_state (application.pipeline, GST_STATE_PAUSED);
+    for (unsigned int iteration = 0;; iteration++) {
+      if (application.joint_stream.video.decodebin_linked.load () && application.joint_stream.audio.decodebin_linked.load ())
+        break;
+      std::this_thread::sleep_for (std::chrono::milliseconds (100));
+      if (iteration == 25)
+        GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox");
+    }
+  }
+
+  GST_INFO ("Playing...");
   set_pipeline_state (application.pipeline, GST_STATE_PLAYING);
   auto message = gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE, static_cast<GstMessageType> (GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
   // NOTE: https://gstreamer.freedesktop.org/documentation/tutorials/basic/debugging-tools.html#getting-pipeline-graphs
   //       https://dreampuf.github.io/GraphvizOnline
   GST_DEBUG_BIN_TO_DOT_FILE (GST_BIN_CAST (application.pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "gstreamer_appsrcsandbox");
   g_assert_true (message != nullptr);
+  if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_ERROR) {
+    GError* error = nullptr;
+    gchar* debug_message = nullptr;
+    gst_message_parse_error (message, &error, &debug_message);
+    GST_ERROR ("%s, %s", GST_MESSAGE_SRC_NAME (message), error->message);
+    if (debug_message)
+      GST_ERROR ("%s", debug_message);
+    g_clear_error (&error);
+    g_free (debug_message);
+  }
   g_assert_true (GST_MESSAGE_TYPE (message) == GST_MESSAGE_EOS);
   gst_message_unref (std::exchange (message, nullptr));
 
   push_thread_termination.store (true);
-  for (auto&& bin : application.bin_list)
-    bin.source_data_condition.notify_all ();
+  for (auto&& stream : application.stream_list)
+    stream.source_data.condition.notify_all ();
+  for (auto* stream : { &application.joint_stream.video, &application.joint_stream.audio })
+    stream->source_data.condition.notify_all ();
   push_thread.join ();
 
   gst_bus_remove_signal_watch (bus);

@@ -9,10 +9,20 @@
             "type": "cppdbg", // https://gist.github.com/evelynluw/588559d9e3619a23507ef9cbc7cd951b
             "request": "launch", // launch, attach
             "program": "${workspaceFolder}/build/sandbox",
-            "args": ["-p", "/home/roman/rpi/build_reference/VideoPlayerTester/AppSrc", "-v", "1", "--bin-count", "2", "--video-bin-index", "1", "--no-sync"],
+            "args": [
+                "--path", "/home/roman/rpi/build_reference/VideoPlayerTester/AppSrc",
+                "--playsink-mode",
+                "--video-index", "1",
+                "-v", "1",
+                "--no-sync"
+            ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}/build",
-            "environment": [],
+            "env": [
+                {
+                    "GST_DEBUG": "*:4"
+                }
+            ],
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
