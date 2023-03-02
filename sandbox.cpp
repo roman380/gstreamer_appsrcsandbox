@@ -1,11 +1,23 @@
+#if defined(__GNUC__)
+#  include <features.h>
+#  if !__GNUC_PREREQ(8, 0) // https://stackoverflow.com/a/259279/868014
+#    define STD_FILESYSTEM_EXPERIMENTAL
+#  endif
+#endif
+
 #include <memory>
 #include <algorithm>
 #include <vector>
 #include <list>
 #include <string>
 #include <sstream>
-#include <filesystem>
-// #include <experimental/filesystem>
+#if defined(STD_FILESYSTEM_EXPERIMENTAL)
+#  include <experimental/filesystem>
+using std::experimental::filesystem::path;
+#else
+#  include <filesystem>
+using namespace std::filesystem::path;
+#endif
 #include <fstream>
 #include <atomic>
 #include <mutex>
@@ -522,8 +534,7 @@ int main (int argc, char* argv[])
   }
 
   std::string path = g_path ? g_path : "../data/appsrc";
-  std::replace (path.begin (), path.end (), '/', static_cast<char> (std:://experimental::
-    filesystem::path::preferred_separator));
+  std::replace (path.begin (), path.end (), '/', static_cast<char> (path::preferred_separator));
   GST_DEBUG ("path %s", path.c_str ());
   std::atomic_bool push_thread_termination = false;
   std::thread push_thread ([&] { application.push (push_thread_termination, path); });
