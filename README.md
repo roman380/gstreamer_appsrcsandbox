@@ -1,6 +1,6 @@
 # GStreamer `appsrc` Sandbox
 
-Record data pushed via appsrc elements in your application into file, and replay retraactively. 
+Record data pushed via appsrc elements in your application into file, and replay retroactively. 
 
 Use helper `AppsrcFile` class from [record.h](record.h) to produce the replay files.
 
