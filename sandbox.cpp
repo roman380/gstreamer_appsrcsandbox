@@ -16,7 +16,7 @@
 using std::experimental::filesystem::path;
 #else
 #  include <filesystem>
-using namespace std::filesystem::path;
+using std::filesystem::path;
 #endif
 #include <fstream>
 #include <atomic>

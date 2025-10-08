@@ -1,8 +1,11 @@
 cmake_minimum_required (VERSION 3.16)
 
-set(CMAKE_CXX_STANDARD 17)
-
 project(sandbox LANGUAGES CXX C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -28,7 +31,9 @@ endif()
 
 add_executable(sandbox ${SOURCE})
 
-target_compile_definitions(sandbox PRIVATE $<$<BOOL:${WITH_APPSINK}>:WITH_APPSINK>)
+target_compile_definitions(sandbox PRIVATE $<$<BOOL:${WITH_APPSINK}>:WITH_APPSINK> NOMINMAX)
 target_include_directories(sandbox PRIVATE ${GST_INCLUDE_DIRS} ${GST_BASE_INCLUDE_DIRS})
 target_link_directories(sandbox PRIVATE ${GST_LIBRARY_DIRS} ${GST_BASE_LIBRARY_DIRS})
 target_link_libraries(sandbox PRIVATE Threads::Threads ${GST_LIBRARIES} ${GST_BASE_LIBRARIES} ${LIBRARY})
+
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT sandbox)
